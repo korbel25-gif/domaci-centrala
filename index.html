@@ -12,6 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Centrála">
+<script>try{var t=localStorage.getItem("cs-theme")||"auto";document.documentElement.dataset.cs=t==="auto"?(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"):t}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
 <link rel="stylesheet" href="core/core.css">
@@ -30,7 +31,7 @@
   <main class="main">
     <header class="topbar">
       <div><div class="lbl" id="crumb"></div><h1 id="title"></h1><p id="subtitle"></p></div>
-      <div class="clock" id="clock" aria-live="off"></div>
+      <div class="topr"><div class="clock" id="clock" aria-live="off"></div><div class="thsw" id="thSw" role="radiogroup" aria-label="Vzhled"></div></div>
     </header>
     <div id="view"></div>
   </main>

@@ -131,6 +131,25 @@
   };
   window.App = App;
 
+  /* ---------- vzhled: auto / tmavý / světlý (pro každé zařízení zvlášť, nesynchronizuje se) ---------- */
+  const TH = 'cs-theme', mqLight = matchMedia('(prefers-color-scheme: light)');
+  const themePref = () => { const v = lsGet(TH); return ['dark', 'light'].includes(v) ? v : 'auto' };
+  function applyTheme() {
+    const p = themePref(), eff = p === 'auto' ? (mqLight.matches ? 'light' : 'dark') : p;
+    document.documentElement.dataset.cs = eff;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', eff === 'light' ? '#EDF1F7' : '#05070E');
+    const sw = document.getElementById('thSw'); if (!sw) return;
+    const I = { auto: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none"/></svg>',
+      dark: '<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
+      light: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>' };
+    const L = { auto: 'Podle systému', dark: 'Tmavý', light: 'Světlý' };
+    sw.innerHTML = ['auto', 'dark', 'light'].map(k => `<button role="radio" aria-checked="${p === k}" data-th="${k}" title="${L[k]}" aria-label="${L[k]}">${I[k]}</button>`).join('');
+    sw.querySelectorAll('[data-th]').forEach(b => b.onclick = () => { lsSet(TH, b.dataset.th); applyTheme(); toast('Vzhled: ' + L[b.dataset.th].toLowerCase() + '.') });
+  }
+  mqLight.addEventListener?.('change', () => { if (themePref() === 'auto') applyTheme() });
+  applyTheme();
+  App.theme = () => document.documentElement.dataset.cs || 'dark';
+
   /* ---------- prohlížeč obrázků ---------- */
   function lightbox(items, i) {
     document.querySelector('.lbx')?.remove();
@@ -500,6 +519,7 @@
   }
 
   /* ---------- pozadí: částice ---------- */
+  const PC = () => document.documentElement.dataset.cs === 'light' ? 'rgba(0,137,168,' : 'rgba(46,240,255,';
   function particles() {
     const c = document.getElementById('fx'); if (!c) return; const x = c.getContext('2d');
     const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -516,11 +536,11 @@
       for (const p of P) {
         p.x += p.vx; p.y += p.vy; if (p.x < 0) p.x = W; if (p.x > W) p.x = 0; if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
         const dm = Math.hypot(p.x - mx, p.y - my); if (dm < 120 && dm > 0) { p.x += (p.x - mx) / dm * .6; p.y += (p.y - my) / dm * .6 }
-        x.fillStyle = 'rgba(46,240,255,.55)'; x.beginPath(); x.arc(p.x, p.y, p.r, 0, 7); x.fill();
+        x.fillStyle = PC() + '.55)'; x.beginPath(); x.arc(p.x, p.y, p.r, 0, 7); x.fill();
       }
       for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
         const a = P[i], b = P[j], d = Math.hypot(a.x - b.x, a.y - b.y);
-        if (d < 110) { x.strokeStyle = `rgba(46,240,255,${(1 - d / 110) * .14})`; x.lineWidth = 1; x.beginPath(); x.moveTo(a.x, a.y); x.lineTo(b.x, b.y); x.stroke() }
+        if (d < 110) { x.strokeStyle = PC() + ((1 - d / 110) * .14) + ')'; x.lineWidth = 1; x.beginPath(); x.moveTo(a.x, a.y); x.lineTo(b.x, b.y); x.stroke() }
       }
       if (!RM && !document.hidden) requestAnimationFrame(draw);
     };

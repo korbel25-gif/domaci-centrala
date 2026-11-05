@@ -29,8 +29,8 @@
   .as-orb.speaking{animation:asPulse .55s ease-in-out infinite}
   @keyframes asSpin{to{transform:rotate(360deg)}}
   @keyframes asPulse{50%{transform:scale(1.08)}}
-  .as-panel{position:fixed;top:0;right:0;bottom:0;width:min(460px,100vw);z-index:29;display:flex;flex-direction:column;background:rgba(4,7,14,.94);backdrop-filter:blur(14px);
-    border-left:1px solid rgba(46,240,255,.35);box-shadow:-20px 0 60px rgba(0,0,0,.5),0 0 40px rgba(46,240,255,.1);transform:translateX(105%);transition:transform .35s cubic-bezier(.2,.8,.2,1);
+  .as-panel{position:fixed;top:0;right:0;bottom:0;width:min(460px,100vw);z-index:29;display:flex;flex-direction:column;background:var(--glass);backdrop-filter:blur(14px);
+    border-left:1px solid rgba(46,240,255,.35);box-shadow:-20px 0 60px var(--shade),0 0 40px rgba(46,240,255,.1);transform:translateX(105%);transition:transform .35s cubic-bezier(.2,.8,.2,1);
     padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-right:env(safe-area-inset-right,0px)}
   .as-panel.open{transform:none}
   .as-head{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}
@@ -48,17 +48,17 @@
   .as-msgs{flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
   .as-m{max-width:88%;padding:10px 13px;border-radius:4px;line-height:1.5;white-space:pre-wrap;word-break:break-word;animation:viewin .3s ease-out}
   .as-m.u{align-self:flex-end;background:var(--accent-soft);border:1px solid rgba(46,240,255,.35)}
-  .as-m.a{align-self:flex-start;background:rgba(14,21,40,.9);border:1px solid var(--line);border-left:2px solid var(--accent)}
+  .as-m.a{align-self:flex-start;background:var(--card2);border:1px solid var(--line);border-left:2px solid var(--accent)}
   .as-m.a.err{border-left-color:var(--exp)}
   .as-t{align-self:flex-start;font-family:var(--f-mono);font-size:11px;color:var(--muted);padding-left:4px}
   .as-t::before{content:"› ";color:var(--accent)}
   .as-chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 18px 10px}
-  .as-chips button{border:1px solid var(--line);background:rgba(8,12,24,.9);color:var(--muted);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:600}
+  .as-chips button{border:1px solid var(--line);background:var(--field);color:var(--muted);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:600}
   .as-chips button:hover{color:var(--fg);border-color:var(--accent)}
   .as-in{display:flex;gap:8px;padding:12px 18px 16px;border-top:1px solid var(--line);align-items:flex-end}
   .as-in textarea{flex:1;resize:none;min-height:42px;max-height:120px;padding:10px 12px}
   .as-in .btn{height:42px;display:grid;place-items:center;padding:0 12px}
-  .as-in .mic.on{background:var(--inc);border-color:var(--inc);color:#03141A;box-shadow:0 0 16px rgba(56,255,165,.6)}
+  .as-in .mic.on{background:var(--inc);border-color:var(--inc);color:var(--on-accent);box-shadow:0 0 16px rgba(56,255,165,.6)}
   .as-in svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
   .as-big{display:grid;place-items:center;padding:20px 0}
   .as-big .orb2{width:180px;height:180px;border-radius:50%;position:relative;cursor:pointer;border:0;background:radial-gradient(circle,rgba(46,240,255,.95) 0 10%,rgba(46,240,255,.18) 11% 34%,rgba(5,8,16,.6) 35%);box-shadow:0 0 60px rgba(46,240,255,.35)}
@@ -66,7 +66,7 @@
   .as-big .orb2::before{inset:-14px;border-top-color:var(--accent);border-right-color:rgba(46,240,255,.3);animation:asSpin 6s linear infinite}
   .as-big .orb2::after{inset:14px;border-bottom-color:#A57BFF;border-left-color:rgba(165,123,255,.3);animation:asSpin 3.5s linear infinite reverse}
   .as-tools{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr));gap:8px}
-  .as-tools div{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:rgba(8,12,24,.6);font-size:12px;color:var(--muted)}
+  .as-tools div{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:var(--card);font-size:12px;color:var(--muted)}
   .as-tools b{display:block;font-family:var(--f-mono);color:var(--accent);font-size:12px;margin-bottom:2px}
   @media (prefers-reduced-motion:reduce){.as-orb::before,.as-orb::after,.as-head .ring::before,.as-big .orb2::before,.as-big .orb2::after{animation:none}}
   `);

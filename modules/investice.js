@@ -31,7 +31,7 @@
   .bars12 div{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;justify-content:flex-end;min-width:0}
   .bars12 i{width:100%;background:linear-gradient(180deg,var(--accent),rgba(46,240,255,.25));transform-origin:bottom;animation:grow .9s cubic-bezier(.2,.8,.2,1) both;box-shadow:0 0 10px rgba(46,240,255,.35);border-radius:1px}
   .bars12 span{font-size:10px;color:var(--muted);font-family:var(--f-mono)}
-  .taxrow{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid rgba(30,43,74,.7);font-size:13px}
+  .taxrow{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
   .taxrow b{font-family:var(--f-mono)}
   `);
 
@@ -191,7 +191,7 @@
             <td style="min-width:140px"><div class="prog ${p.exQty >= p.qty - 1e-9 ? 'done' : ''}"><b style="width:${p.exQty / p.qty * 100}%"></b></div><div class="x">${fmt.num(p.exQty, 2)} z ${fmt.num(p.qty, 2)} ks osvobozeno</div></td></tr>`).join('')}
           </tbody></table></div></section>
           <div class="grid2">
-            <section class="panel"><div class="phead"><h2>Rozložení</h2></div><div class="inv-donut"><svg viewBox="0 0 42 42"><circle r="15.915" cx="21" cy="21" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="4.2"/>${segs}</svg>
+            <section class="panel"><div class="phead"><h2>Rozložení</h2></div><div class="inv-donut"><svg viewBox="0 0 42 42"><circle r="15.915" cx="21" cy="21" fill="none" stroke="var(--track)" stroke-width="4.2"/>${segs}</svg>
               <div class="inv-leg">${c.pos.map((p, i) => `<div><i style="background:${PAL[i % PAL.length]}"></i>${esc(p.ticker)}<b>${fmt.pct(p.value / tot * 100)}</b></div>`).join('')}</div></div></section>
             <section class="panel"><div class="phead"><h2>Vloženo za posledních 12 měsíců</h2><span class="muted num">${fmt.czk(inv.reduce((a, b) => a + b, 0))}</span></div>
               <div class="bars12">${inv.map((v, k) => `<div title="${App.MONTHS[+months[k].slice(5) - 1]}: ${fmt.czk(v)}"><i style="height:${Math.max(2, v / mx * 100)}%;animation-delay:${k * 50}ms"></i><span>${App.MON[+months[k].slice(5) - 1]}</span></div>`).join('')}</div></section>

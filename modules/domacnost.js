@@ -22,7 +22,7 @@
   .scenes .btn{padding:14px 10px}
   .rooms{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px}
   .room h2{margin-bottom:12px}
-  .dev{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:var(--r);background:rgba(8,12,24,.6);transition:box-shadow .35s,border-color .35s}
+  .dev{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:var(--r);background:var(--card);transition:box-shadow .35s,border-color .35s}
   .room .devs{display:flex;flex-direction:column;gap:10px}
   .dev header{display:flex;justify-content:space-between;align-items:center;gap:10px}
   .dev header b{display:flex;align-items:center;gap:8px}
@@ -33,11 +33,13 @@
   .dev.plug.on .bulb{background:var(--inc);box-shadow:0 0 12px var(--inc)}
   .dev input[type=range]{width:100%;accent-color:var(--accent)}
   .blind{height:46px;border:1px solid var(--line);position:relative;overflow:hidden;background:linear-gradient(180deg,rgba(46,240,255,.12),rgba(140,90,255,.08))}
-  .blind i{position:absolute;inset:0 0 auto;background:repeating-linear-gradient(180deg,#24314f 0 5px,#141c30 5px 7px);transition:height .5s cubic-bezier(.2,.8,.2,1)}
-  .gate{height:10px;background:rgba(255,255,255,.07);position:relative;overflow:hidden}
+  .blind i{position:absolute;inset:0 0 auto;background:repeating-linear-gradient(180deg,var(--slat1) 0 5px,var(--slat2) 5px 7px);transition:height .5s cubic-bezier(.2,.8,.2,1)}
+  .gate{height:10px;background:var(--track);position:relative;overflow:hidden}
   .gate i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);box-shadow:0 0 10px var(--accent);transition:width 2.4s linear}
-  .hp{position:relative;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:#04060c}
+  .hp{position:relative;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--ink)}
   .hp img{display:block;width:100%;height:auto;filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(1.1);opacity:.55;user-select:none}
+  [data-cs="light"] .hp img{filter:none;opacity:.75}
+  [data-cs="light"] .hp .rm polygon{stroke:rgba(0,137,168,.3)}
   .hp svg{position:absolute;inset:0;width:100%;height:100%}
   .hp .rm{cursor:pointer;outline:none}
   .hp .rm polygon{fill:rgba(46,240,255,.03);stroke:rgba(46,240,255,.25);stroke-width:3;transition:fill .5s,stroke .3s,filter .5s}
@@ -45,7 +47,7 @@
   .hp .rm:hover polygon,.hp .rm:focus-visible polygon{stroke:var(--accent);fill:rgba(46,240,255,.12)}
   .hp .rm.lit:hover polygon{fill:rgba(255,210,74,calc(.18 + var(--lv,1)*.32))}
   .hp .rm.sel polygon{stroke:var(--accent);stroke-width:7;filter:drop-shadow(0 0 14px rgba(46,240,255,.8))}
-  .hp text{font-family:var(--f-display);fill:var(--fg);text-anchor:middle;pointer-events:none;paint-order:stroke;stroke:#04060c;stroke-width:8px;stroke-linejoin:round}
+  .hp text{font-family:var(--f-display);fill:var(--fg);text-anchor:middle;pointer-events:none;paint-order:stroke;stroke:var(--ink);stroke-width:8px;stroke-linejoin:round}
   .hp text.n{font-size:34px;font-weight:600}.hp text.t{font-size:30px;font-family:var(--f-mono);fill:var(--accent)}.hp text.i{font-size:24px;fill:var(--warn)}
   .hp-x{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;align-items:center}
   .hp-x button{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 14px;font-weight:600;font-size:13px}
@@ -175,7 +177,7 @@
         <div class="banner"><b class="sim">Simulace.</b> <span>Zařízení zatím nejsou skutečná. Napojení na Home Assistant nebo jiný systém se doplní v kódu modulu (funkce haCall).</span></div>
         <div class="hm-top">
           <section class="panel"><div class="phead"><h2>Termostat</h2><span class="pill dim" id="thState"></span></div>
-            <div class="thermo"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="8" stroke-dasharray="235.6 314.2" transform="rotate(135 60 60)"/>
+            <div class="thermo"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--track)" stroke-width="8" stroke-dasharray="235.6 314.2" transform="rotate(135 60 60)"/>
               <circle class="arc" id="thArc" cx="60" cy="60" r="50" stroke-dasharray="235.6 314.2" transform="rotate(135 60 60)"/>
               <text x="60" y="58" text-anchor="middle" font-size="22" id="thCur"></text><text x="60" y="78" text-anchor="middle" font-size="9" style="fill:var(--muted)" id="thTgt"></text></svg>
             <div class="ctl"><button class="btn" id="thUp" aria-label="Zvýšit teplotu">+</button><button class="btn" id="thDn" aria-label="Snížit teplotu">−</button></div></div></section>

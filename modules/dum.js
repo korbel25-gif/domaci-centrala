@@ -146,7 +146,7 @@
   .dm-viz{position:relative;display:block;width:100%;aspect-ratio:16/9;padding:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--sunk);cursor:zoom-in}
   .dm-viz img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 1.2s ease,transform 7s linear;transform:scale(1.04)}
   .dm-viz img.on{opacity:1;transform:scale(1.1)}
-  .dm-viz .tag{position:absolute;left:10px;bottom:10px;font:600 11px var(--f-mono);letter-spacing:.06em;background:rgba(5,7,14,.7);border:1px solid var(--line);padding:3px 8px;border-radius:4px;color:var(--fg)}
+  .dm-viz .tag{position:absolute;left:10px;bottom:10px;font:600 11px var(--f-mono);letter-spacing:.06em;background:rgba(5,7,14,.7);border:1px solid var(--line);padding:3px 8px;border-radius:4px;color:#F2F7FF}
   .dm-viz::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 1px rgba(46,240,255,.15),inset 0 -60px 60px -40px rgba(5,7,14,.6);pointer-events:none}
   .dm-bil{display:grid;grid-template-columns:1fr auto;gap:7px 14px;align-content:start;font-size:13px}
   .dm-bil span:nth-child(odd){color:var(--muted)} .dm-bil span:nth-child(even){font-family:var(--f-mono);text-align:right}
@@ -258,7 +258,7 @@
             <select id="dmF" aria-label="Fáze"><option value="">Všechny fáze</option>${PHASES.map(p => `<option value="${p.id}"${phaseF === p.id ? ' selected' : ''}>${p.name}</option>`).join('')}</select>
             ${a.conflicts.length ? `<button class="btn sm" id="dmRe">Posunout návazné úkoly (${a.conflicts.length})</button>` : ''}</div></div>
             <div class="gantt" id="gantt">${gantt(a)}</div>
-            <div class="dm-legend">${PHASES.map(p => `<span><i style="background:${p.color}"></i>${p.name}</span>`).join('')}<span><i style="background:transparent;border:1px dashed #fff"></i>kritická cesta</span><span><i style="background:var(--inc)"></i>hotovo</span><span><i style="background:var(--exp)"></i>po termínu / termín č. p.</span></div></section>
+            <div class="dm-legend">${PHASES.map(p => `<span><i style="background:${p.color}"></i>${p.name}</span>`).join('')}<span><i style="background:transparent;border:1px dashed var(--fg)"></i>kritická cesta</span><span><i style="background:var(--inc)"></i>hotovo</span><span><i style="background:var(--exp)"></i>po termínu / termín č. p.</span></div></section>
           <section class="panel"><div class="phead"><h2>Úkoly</h2><span class="muted">Klikněte na pruh v grafu nebo upravte data přímo v tabulce.</span></div>
             <div class="tablebox"><table class="dm-tasks"><thead><tr><th></th><th>Úkol</th><th>Kdo</th><th>Od</th><th>Do</th><th class="amt">Dní</th><th>Stav</th></tr></thead><tbody>
             ${d.tasks.filter(t => !phaseF || t.ph === phaseF).sort((x, y) => x.start.localeCompare(y.start)).map(t => { const late = !t.done && t.end < a.td, conf = a.conflicts.includes(t); return `<tr data-row="${t.id}" class="${sel === t.id ? 'sel' : ''} ${t.done ? 'dn' : ''}">
