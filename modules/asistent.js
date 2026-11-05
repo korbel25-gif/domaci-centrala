@@ -11,8 +11,9 @@
 (function () {
   const { esc, fmt } = App;
   const store = App.store('asistent');
-  const CFG0 = { name: 'Atlas', brain: 'auto', apiKey: '', model: 'claude-sonnet-4-5', voice: true, voiceName: '', wake: false, depth: 'quick' };
+  const CFG0 = { name: 'Jarvis', brain: 'auto', apiKey: '', model: 'claude-sonnet-4-5', voice: true, voiceName: '', wake: false, depth: 'quick' };
   let cfg = Object.assign({}, CFG0, store.get('cfg', {}));
+  if (cfg.name === 'Atlas') { cfg.name = CFG0.name; store.set('cfg', cfg) }
   const saveCfg = () => store.set('cfg', cfg);
   const nt = x => String(x || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
   const owner = () => App.raw.get('hs:core:owner') || '';
@@ -141,9 +142,10 @@
     if (wakeRec) return;
     wakeRec = new SR(); wakeRec.lang = 'cs-CZ'; wakeRec.continuous = true; wakeRec.interimResults = false;
     wakeRec.onresult = e => {
-      const t = e.results[e.results.length - 1][0].transcript.trim(), n = nt(t), nm = nt(cfg.name);
-      const at = n.search(new RegExp('(^|\\s)(hej\\s+)?' + nm + '\\b'));
-      if (at >= 0) { const cmd = t.slice(at).replace(new RegExp('^\\s*(hej\\s+)?' + cfg.name + '[,!.\\s]*', 'i'), '').trim(); toggle(true); if (cmd.length > 2) ask(cmd); else { armedUntil = Date.now() + 8000; say('Ano?') } }
+      const t = e.results[e.results.length - 1][0].transcript.trim(), n = nt(t), nm = nt(cfg.name).replace(/[^a-z0-9]/g, '');
+      const pat = '(' + nm + (nm[0] === 'j' ? '|dz' + nm.slice(1) : '') + ')[a-z]*';   // „Jarvis“ i „Džarvisi“
+      const at = n.search(new RegExp('(^|\\s)(hej\\s+)?' + pat));
+      if (at >= 0) { const cmd = t.slice(at).replace(/^\s*(hej\s+)?\S+[,!.\s]*/i, '').trim(); toggle(true); if (cmd.length > 2) ask(cmd); else { armedUntil = Date.now() + 8000; say('Ano?') } }
       else if (Date.now() < armedUntil) { armedUntil = 0; ask(t) }
     };
     wakeRec.onerror = e => { if (e.error === 'not-allowed') { cfg.wake = false; saveCfg(); wakeRec = null } };
