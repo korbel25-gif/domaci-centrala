@@ -83,6 +83,25 @@
     konstrukce: 'jednopodlažní dřevostavba v pasivním standardu, obvodová stěna 368 mm', tzb: 'tepelné čerpadlo, rekuperace', rozpocet: 'cca 5,31 mil. Kč vč. DPH 12 % (položkový rozpočet 9/2026, dům vč. TZB, bez vedlejších staveb)'
   };
 
+  /* ---------- architektonická studie (obrázky ve složce img/dum) ---------- */
+  const STUDIE = {
+    datum: '8. 9. 2026',
+    bilance: [['Pozemek', '656 m²'], ['Zastavěná plocha', '125,88 m²'], ['Užitná plocha', '101,98 m²'], ['Obestavěný prostor', 'cca 690 m³'],
+      ['Krytá terasa', '22,54 m²'], ['Kryté stání 2 OA + kola', '74,60 m²'], ['Sklad a sauna', '39,66 m²'], ['Rozměr domu', '16,97 × 7,72 m']],
+    mistnosti: [['1.01', 'Zádveří', 6.12], ['1.02', 'Technická místnost', 5.56], ['1.03', 'WC', 2.56], ['1.04', 'Pracovna', 8.15], ['1.05', 'Obývací pokoj s kuchyní', 33.29],
+      ['1.06', 'Chodba', 4.48], ['1.07', 'Koupelna', 7.44], ['1.08', 'Ložnice', 13.77], ['1.09', 'Pokoj', 10.73], ['1.10', 'Pokoj', 9.88]],
+    viz: [1, 2, 3, 4, 5, 6, 7, 8].map(n => ({ src: `img/dum/viz-${n}.jpg`, th: `img/dum/viz-${n}-t.jpg`, title: `Vizualizace ${n}` })),
+    plany: [
+      { tab: 'Půdorys', items: [['pudorys', 'Půdorys přízemí 1:50']] },
+      { tab: 'Situace', items: [['situace', 'Situace 1:100']] },
+      { tab: 'Řezy', items: [['rez-a', 'Řez A-A'], ['rez-b', 'Řez B-B'], ['rez-c', 'Řez C-C']] },
+      { tab: 'Pohledy', items: [['pohled-j', 'Pohled jižní'], ['pohled-v', 'Pohled východní'], ['pohled-s', 'Pohled severní'], ['pohled-z', 'Pohled západní']] },
+      { tab: 'Základy a střecha', items: [['zaklady', 'Půdorys základů'], ['strecha', 'Půdorys střechy']] }
+    ]
+  };
+  const planItems = () => STUDIE.plany.flatMap(g => g.items.map(([k, t]) => ({ k, src: App.asset(`img/dum/plan-${k}.webp`), th: App.asset(`img/dum/plan-${k}-t.webp`), title: t, plan: true })));
+  const vizItems = () => STUDIE.viz.map(v => ({ ...v, src: App.asset(v.src), th: App.asset(v.th) }));
+
   /* ---------- pomocné ---------- */
   const DAY = 864e5;
   const dt = s => new Date(s + 'T00:00:00Z');
@@ -122,6 +141,31 @@
   }
 
   App.css('dum', `
+  .dm-st-top{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(220px,1fr);gap:18px;align-items:stretch}
+  @media (max-width:800px){.dm-st-top{grid-template-columns:1fr}}
+  .dm-viz{position:relative;display:block;width:100%;aspect-ratio:16/9;padding:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--sunk);cursor:zoom-in}
+  .dm-viz img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 1.2s ease,transform 7s linear;transform:scale(1.04)}
+  .dm-viz img.on{opacity:1;transform:scale(1.1)}
+  .dm-viz .tag{position:absolute;left:10px;bottom:10px;font:600 11px var(--f-mono);letter-spacing:.06em;background:rgba(5,7,14,.7);border:1px solid var(--line);padding:3px 8px;border-radius:4px;color:var(--fg)}
+  .dm-viz::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 1px rgba(46,240,255,.15),inset 0 -60px 60px -40px rgba(5,7,14,.6);pointer-events:none}
+  .dm-bil{display:grid;grid-template-columns:1fr auto;gap:7px 14px;align-content:start;font-size:13px}
+  .dm-bil span:nth-child(odd){color:var(--muted)} .dm-bil span:nth-child(even){font-family:var(--f-mono);text-align:right}
+  .dm-thumbs{display:flex;gap:8px;overflow-x:auto;padding:12px 0 4px;scrollbar-width:thin}
+  .dm-thumbs button{flex:none;width:112px;aspect-ratio:16/9;padding:0;border:1px solid var(--line);border-radius:4px;overflow:hidden;background:var(--sunk);opacity:.6;transition:opacity .2s,border-color .2s}
+  .dm-thumbs button img{width:100%;height:100%;object-fit:cover;display:block}
+  .dm-thumbs button:hover,.dm-thumbs button.on{opacity:1;border-color:var(--accent)}
+  .dm-ptabs{display:flex;gap:6px;flex-wrap:wrap;margin:16px 0 10px}
+  .dm-ptabs button{border:1px solid var(--line);background:transparent;border-radius:999px;padding:5px 12px;font-size:13px;font-weight:600;color:var(--muted)}
+  .dm-ptabs button.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  .dm-plans{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr));gap:12px}
+  .dm-plans button{padding:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:#fff;text-align:left;cursor:zoom-in;transition:border-color .2s,box-shadow .2s}
+  .dm-plans button:hover{border-color:var(--accent);box-shadow:0 0 18px rgba(46,240,255,.2)}
+  .dm-plans img{display:block;width:100%;aspect-ratio:3/2;object-fit:contain;background:#fff}
+  .dm-plans span{display:block;padding:7px 10px;background:var(--surface);color:var(--fg);font-size:13px;font-weight:600;border-top:1px solid var(--line)}
+  .dm-plans.one{grid-template-columns:1fr}.dm-plans.one img{aspect-ratio:auto;max-height:560px}
+  .dm-rooms{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+  .dm-rooms td{padding:5px 8px;border-bottom:1px solid var(--line)} .dm-rooms td:last-child{text-align:right;font-family:var(--f-mono)}
+  .dm-rooms tr:last-child td{border-bottom:0;font-weight:700;color:var(--accent)}
   .dm-hero{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:16px}
   @media (max-width:900px){.dm-hero{grid-template-columns:1fr}}
   .dm-count{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
@@ -164,6 +208,8 @@
 
     tools(ctx) {
       return [
+        { name: 'house_study', description: 'Údaje z architektonické studie domu ve Vejprnicích: bilance ploch (pozemek, zastavěná, užitná plocha, obestavěný prostor, terasa, kryté stání, sklad a sauna) a výpis místností s plochami.',
+          run: () => ({ datum: STUDIE.datum, bilance: Object.fromEntries(STUDIE.bilance), mistnosti: STUDIE.mistnosti.map(([c, n, a]) => ({ cislo: c, nazev: n, plocha_m2: a })) }) },
         { name: 'house_status', description: 'Stav projektu stavby rodinného domu ve Vejprnicích: dny do termínu čísla popisného (únor 2028), plánované datum čísla popisného a trvalého pobytu, rezerva, procento hotových úkolů, úkoly po termínu, běžící a nejbližší úkoly, kolize v návaznostech.',
           run: () => { const d = load(ctx.store), a = analyse(d), m = t => ({ id: t.id, ukol: t.name, kdo: t.who, od: t.start, do: t.end, kriticky: t.crit });
             return { termin_cp: d.deadline, dni_do_terminu: a.daysLeft, planovane_cp: a.cp, planovany_pobyt: a.pobyt, rezerva_dni: a.slack, hotovo_procent: Math.round(a.progress * 100), po_terminu: a.late.map(m), bezi: a.running.map(m), nejblizsi: a.next.map(m), kolize: a.conflicts.map(m) } } },
@@ -182,14 +228,15 @@
     widget(el, ctx) {
       const d = load(ctx.store), a = analyse(d), nx = a.next[0] || a.running[0];
       const st = a.slack == null ? 'warn' : a.slack >= 14 ? 'ok' : a.slack >= 0 ? 'warn' : 'bad';
-      el.innerHTML = `<div class="wnums"><div><span>Do termínu č. p.</span><b data-count="${a.daysLeft}" data-fmt="num">${a.daysLeft}</b></div>
+      el.innerHTML = `<img src="${App.asset('img/dum/viz-1-t.jpg')}" alt="" style="display:block;width:100%;height:84px;object-fit:cover;border-radius:4px;margin-bottom:10px;opacity:.85">
+        <div class="wnums"><div><span>Do termínu č. p.</span><b data-count="${a.daysLeft}" data-fmt="num">${a.daysLeft}</b></div>
         <div><span>Rezerva</span><b style="color:var(--${st === 'ok' ? 'inc' : st === 'warn' ? 'warn' : 'exp'})">${a.slack} dní</b></div><div><span>Hotovo</span><b>${Math.round(a.progress * 100)} %</b></div></div>
         <div class="meter ok"><b style="width:${Math.max(2, a.progress * 100)}%"></b></div>
         <span class="wnote">${a.late.length ? `<span style="color:var(--exp)">${a.late.length} úkolů po termínu.</span> ` : ''}${nx ? `Další: ${esc(nx.name)} (${fmt.date(nx.start)})` : ''}</span>`;
     },
 
     mount(root, ctx) {
-      let d = load(ctx.store), sel = null, phaseF = '';
+      let d = load(ctx.store), sel = null, phaseF = '', vizI = 0, planTab = 0, vizHold = 0;
       const save = () => ctx.store.set('data', d);
       const $ = s => root.querySelector(s);
 
@@ -206,6 +253,7 @@
             <section class="panel"><div class="phead"><h2>Teď na řadě</h2></div>
               <div class="lots">${[...a.late.map(t => [t, 'bad']), ...a.running.map(t => [t, 'warn']), ...a.next.map(t => [t, 'dim'])].slice(0, 6).map(([t, c]) => `<div class="taxrow"><span><span class="pill ${c}">${c === 'bad' ? 'po termínu' : c === 'warn' ? 'běží' : fmt.date(t.start)}</span> ${esc(t.name)}</span><span class="who muted">${esc(t.who)}</span></div>`).join('')}</div></section>
           </div>
+          ${studie()}
           <section class="panel"><div class="phead"><h2>Harmonogram</h2><div class="acts">
             <select id="dmF" aria-label="Fáze"><option value="">Všechny fáze</option>${PHASES.map(p => `<option value="${p.id}"${phaseF === p.id ? ' selected' : ''}>${p.name}</option>`).join('')}</select>
             ${a.conflicts.length ? `<button class="btn sm" id="dmRe">Posunout návazné úkoly (${a.conflicts.length})</button>` : ''}</div></div>
@@ -233,6 +281,30 @@
               <span>Daň z prodeje</span><span>Pokud jste byt koupili před rokem 2021 a vlastníte ho přes 5 let, je prodej osvobozen. Při koupi po roce 2020 platí 10letý test; osvobození pak získáte, když peníze použijete na vlastní bytovou potřebu (stavba domu, splacení úvěru na pozemek) do konce roku následujícího po prodeji a oznámíte to finančnímu úřadu. Ověřte s daňovým poradcem.</span></div></section>
           </div></div>`;
         wire(a); App.countUp(root);
+      }
+
+      function studie() {
+        const V = vizItems(), g = STUDIE.plany[planTab] || STUDIE.plany[0], P = planItems();
+        const sum = STUDIE.mistnosti.reduce((x, r) => x + r[2], 0);
+        return `<section class="panel"><div class="phead"><h2>Studie domu</h2><span class="muted">architektonická studie ${STUDIE.datum}</span></div>
+          <div class="dm-st-top">
+            <button class="dm-viz" id="dmViz" aria-label="Zvětšit vizualizaci">${V.map((v, i) => `<img src="${v.src}" alt="${esc(v.title)}"${i === vizI ? ' class="on"' : ''} loading="${i === vizI ? 'eager' : 'lazy'}">`).join('')}<span class="tag" id="dmVizN">${vizI + 1} / ${V.length}</span></button>
+            <div><div class="lbl" style="margin-bottom:8px">Základní bilance</div><div class="dm-bil">${STUDIE.bilance.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>
+              <details style="margin-top:12px"><summary class="muted" style="cursor:pointer">Výpis místností</summary><table class="dm-rooms"><tbody>
+              ${STUDIE.mistnosti.map(r => `<tr><td class="muted">${r[0]}</td><td>${r[1]}</td><td>${r[2].toFixed(2).replace('.', ',')} m²</td></tr>`).join('')}
+              <tr><td></td><td>Celkem</td><td>${sum.toFixed(2).replace('.', ',')} m²</td></tr></tbody></table></details></div>
+          </div>
+          <div class="dm-thumbs" role="list">${V.map((v, i) => `<button role="listitem" data-vz="${i}" class="${i === vizI ? 'on' : ''}" aria-label="${esc(v.title)}"><img src="${v.th}" alt="" loading="lazy"></button>`).join('')}</div>
+          <div class="dm-ptabs" role="tablist">${STUDIE.plany.map((p, i) => `<button role="tab" data-pt="${i}" class="${i === planTab ? 'on' : ''}" aria-selected="${i === planTab}">${p.tab}</button>`).join('')}</div>
+          <div class="dm-plans${g.items.length === 1 ? ' one' : ''}">${g.items.map(([k, t]) => { const it = P.find(x => x.k === k); return `<button data-pl="${k}"><img src="${g.items.length === 1 ? it.src : it.th}" alt="${esc(t)}" loading="lazy"><span>${esc(t)}</span></button>` }).join('')}</div>
+        </section>`;
+      }
+      function vizShow(k) {
+        const imgs = root.querySelectorAll('#dmViz img'); if (!imgs.length) return;
+        vizI = (k + imgs.length) % imgs.length;
+        imgs.forEach((im, j) => { im.classList.toggle('on', j === vizI); if (j === vizI) im.loading = 'eager' });
+        root.querySelectorAll('[data-vz]').forEach((b, j) => b.classList.toggle('on', j === vizI));
+        const n = root.querySelector('#dmVizN'); if (n) n.textContent = `${vizI + 1} / ${imgs.length}`;
       }
 
       function gantt(a) {
@@ -296,6 +368,12 @@
       }
 
       function wire(a) {
+        const vz = $('#dmViz');
+        vz.onclick = () => App.lightbox(vizItems(), vizI);
+        vz.onmouseenter = () => vizHold = Infinity; vz.onmouseleave = () => vizHold = 0;
+        root.querySelectorAll('[data-vz]').forEach(b => b.onclick = () => { vizShow(+b.dataset.vz); vizHold = Date.now() + 15000 });
+        root.querySelectorAll('[data-pt]').forEach(b => b.onclick = () => { planTab = +b.dataset.pt; const y = scrollY; draw(); scrollTo(0, y) });
+        root.querySelectorAll('[data-pl]').forEach(b => b.onclick = () => { const P = planItems(); App.lightbox(P, P.findIndex(x => x.k === b.dataset.pl)) });
         $('#dmF').onchange = e => { phaseF = e.target.value; draw() };
         const re = $('#dmRe'); if (re) re.onclick = () => { const n = reschedule(d); save(); draw(); ctx.toast(`Posunuto ${n} úkolů. Zkontrolujte rezervu do termínu.`) };
         root.querySelectorAll('[data-bar]').forEach(g => g.onclick = () => { sel = sel === g.dataset.bar ? null : g.dataset.bar; draw(); const r = root.querySelector(`[data-row="${sel}"]`); r?.scrollIntoView({ behavior: 'smooth', block: 'center' }) });
@@ -311,7 +389,9 @@
         root.querySelectorAll('[data-add]').forEach(b => b.onclick = () => { const k = b.dataset.add; d.budget[k].push({ id: 'x' + Date.now(), name: k === 'zdroje' ? 'Nový zdroj' : 'Nový náklad', amount: 0, date: App.today() }); save(); draw() });
       }
       draw();
-      return ctx.bus.on('dum:changed', () => { d = load(ctx.store); draw() });
+      const rot = setInterval(() => { if (Date.now() < vizHold) return; if (!document.hidden && !document.querySelector('.lbx')) vizShow(vizI + 1) }, 6500);
+      const off = ctx.bus.on('dum:changed', () => { d = load(ctx.store); draw() });
+      return () => { clearInterval(rot); off() };
     }
   });
 

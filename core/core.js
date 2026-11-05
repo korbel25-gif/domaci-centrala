@@ -121,9 +121,60 @@
       });
     },
 
+    /** Cesta k souboru ve složce aplikace (v jednosouborové verzi vloženo přímo) */
+    asset: p => (window.CENTRALA_ASSETS || {})[p] || p,
+
+    /** Prohlížeč obrázků přes celou obrazovku: App.lightbox([{src, title, plan}], index) */
+    lightbox(items, i = 0) { lightbox(items, i) },
+
     start() { App.sync.catchRedirect(); buildNav(); window.addEventListener('hashchange', route); route(); clock(); particles(); glow(); App.sync.init() }
   };
   window.App = App;
+
+  /* ---------- prohlížeč obrázků ---------- */
+  function lightbox(items, i) {
+    document.querySelector('.lbx')?.remove();
+    const el = document.createElement('div'); el.className = 'lbx'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true');
+    el.innerHTML = `<div class="lbx-bar"><b class="lbx-t"></b><span class="lbx-n muted num"></span><span style="flex:1"></span>
+      <button class="btn sm" data-z="-" aria-label="Oddálit">−</button><button class="btn sm" data-z="+" aria-label="Přiblížit">+</button>
+      <a class="btn sm lbx-o" target="_blank" rel="noopener">Originál</a><button class="btn sm" data-x aria-label="Zavřít">✕</button></div>
+      <div class="lbx-st"><img alt=""></div>
+      <button class="lbx-nav prev" aria-label="Předchozí">‹</button><button class="lbx-nav next" aria-label="Další">›</button>`;
+    document.body.appendChild(el);
+    const st = el.querySelector('.lbx-st'), img = st.querySelector('img');
+    let z = 1;
+    const zoom = (nz, cx, cy) => {
+      nz = Math.max(1, Math.min(5, nz)); const r = st.getBoundingClientRect();
+      cx = cx ?? r.width / 2; cy = cy ?? r.height / 2;
+      const fx = (st.scrollLeft + cx) / (st.scrollWidth || 1), fy = (st.scrollTop + cy) / (st.scrollHeight || 1);
+      z = nz; img.style.width = z * 100 + '%'; img.style.height = z * 100 + '%'; st.classList.toggle('zoomed', z > 1);
+      st.scrollLeft = fx * st.scrollWidth - cx; st.scrollTop = fy * st.scrollHeight - cy;
+    };
+    const show = k => {
+      i = (k + items.length) % items.length; const it = items[i];
+      z = 1; zoom(1); img.src = it.src; img.alt = it.title || ''; el.classList.toggle('plan', !!it.plan);
+      el.querySelector('.lbx-t').textContent = it.title || ''; el.querySelector('.lbx-n').textContent = items.length > 1 ? `${i + 1} / ${items.length}` : '';
+      el.querySelector('.lbx-o').href = it.src; el.querySelectorAll('.lbx-nav').forEach(b => b.hidden = items.length < 2);
+    };
+    const close = () => { el.remove(); document.removeEventListener('keydown', key) };
+    const key = e => { if (e.key === 'Escape') close(); else if (e.key === 'ArrowRight') show(i + 1); else if (e.key === 'ArrowLeft') show(i - 1); else if (e.key === '+') zoom(z * 1.6); else if (e.key === '-') zoom(z / 1.6) };
+    document.addEventListener('keydown', key);
+    el.querySelector('[data-x]').onclick = close;
+    el.querySelector('.prev').onclick = () => show(i - 1); el.querySelector('.next').onclick = () => show(i + 1);
+    el.querySelector('[data-z="+"]').onclick = () => zoom(z * 1.6); el.querySelector('[data-z="-"]').onclick = () => zoom(z / 1.6);
+    st.addEventListener('wheel', e => { if (!e.ctrlKey && z === 1 && Math.abs(e.deltaY) < 40) return; e.preventDefault(); const r = st.getBoundingClientRect(); zoom(z * (e.deltaY < 0 ? 1.25 : .8), e.clientX - r.left, e.clientY - r.top) }, { passive: false });
+    // tažení myší / prstem: posun při přiblížení, švih do stran mění obrázek
+    let drag = null, moved = 0;
+    st.onpointerdown = e => { drag = { x: e.clientX, y: e.clientY, l: st.scrollLeft, t: st.scrollTop, id: e.pointerId }; moved = 0; if (e.pointerType === 'mouse') st.setPointerCapture(e.pointerId) };
+    st.onpointermove = e => { if (!drag || drag.id !== e.pointerId) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; moved = Math.max(moved, Math.abs(dx) + Math.abs(dy)); if (z > 1 && e.pointerType === 'mouse') { st.scrollLeft = drag.l - dx; st.scrollTop = drag.t - dy } };
+    st.onpointerup = e => {
+      if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y, d = drag; drag = null;
+      if (z === 1 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { show(i + (dx < 0 ? 1 : -1)); return }
+      if (moved < 8) { if (e.target !== img && z === 1) { close(); return } const r = st.getBoundingClientRect(); zoom(z > 1 ? 1 : 2.5, e.clientX - r.left, e.clientY - r.top) }
+    };
+    st.onpointercancel = () => drag = null;
+    show(i); el.querySelector('[data-x]').focus();
+  }
 
   /* ---------- navigace a směrování ---------- */
   function buildNav() {

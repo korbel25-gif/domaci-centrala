@@ -38,6 +38,7 @@ modules/faktury.js    Faktury OSVČ (QR platba, úhrady, limit DPH, párování 
 modules/domacnost.js  Chytrá domácnost (zatím simulace, připraveno na Home Assistant)
 modules/asistent.js   Asistent – hlas i text, Claude s nástroji modulů, offline povely, hlášení
 modules/_sablona.js   šablona pro nový modul
+img/dum/              vizualizace a výkresy ze studie domu (moduly Dům a Chytrá domácnost)
 ```
 
 ## Nový modul ve 3 krocích
