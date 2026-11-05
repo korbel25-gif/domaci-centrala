@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Domácí centrála</title>
+<meta name="theme-color" content="#05070E">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Centrála">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="core/core.css">
+<!-- Knihovny třetích stran (potřebují internet): Excel import a QR platby -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+<canvas id="fx" aria-hidden="true"></canvas>
+<div class="shell">
+  <aside class="side">
+    <a class="brand" href="#prehled"><span class="logo"><i></i></span><b>Domácí centrála<small>osobní systém</small></b></a>
+    <nav class="nav" id="nav" aria-label="Moduly"></nav>
+    <div class="sysst"><span class="on">Systém online</span><span id="modCount"></span><span id="syncSt" role="button" tabindex="0">data jen v tomto prohlížeči</span></div>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <div><div class="lbl" id="crumb"></div><h1 id="title"></h1><p id="subtitle"></p></div>
+      <div class="clock" id="clock" aria-live="off"></div>
+    </header>
+    <div id="view"></div>
+  </main>
+</div>
+<div class="toast" id="coreToast" hidden></div>
+
+<script src="config.js"></script>
+<script src="core/core.js"></script>
+
+<!-- ============ MODULY ============
+     Nový modul = nový řádek. Pořadí v menu určuje vlastnost "order" v modulu. -->
+<script src="modules/rozpocet.js"></script>
+<script src="modules/dum.js"></script>
+<script src="modules/investice.js"></script>
+<script src="modules/faktury.js"></script>
+<script src="modules/domacnost.js"></script>
+<script src="modules/asistent.js"></script>
+<!-- <script src="modules/_sablona.js"></script> -->
+
+<script>App.start()</script>
+</body>
+</html>
