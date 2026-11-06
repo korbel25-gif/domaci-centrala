@@ -33,6 +33,8 @@ const MARKUP = `<div class="wrap">
 
   <div class="kpis" id="kpis"></div>
 
+  <section class="panel" id="rpPanel"></section>
+
 
   <div class="split">
     <section class="panel">
@@ -90,6 +92,72 @@ const MARKUP = `<div class="wrap">
 <div class="toast" id="toast" hidden></div>
 `;
 
+
+/* =====================================================================
+   PRAVIDELNÉ PLATBY – co je potřeba každý měsíc zaplatit.
+   Data: App.store('rozpocet') → 'pravidelne' (synchronizuje se).
+   Zaplaceno se pozná podle nahraných výpisů (částka ± 2 %, nebo klíčové slovo
+   a částka ± 10 % v okně ±12 dní od splatnosti), nebo ručním odškrtnutím.
+   Splátky úvěrů doplňuje modul Hypotéka přes App.loanPayments().
+   ===================================================================== */
+const RP = App.store('rozpocet');
+const RP_FREQ = { m: ['měsíčně', 1], q: ['čtvrtletně', 3], h: ['pololetně', 6], y: ['ročně', 12] };
+const rpNorm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const rpItems = () => {
+  const own = RP.get('pravidelne', []);
+  const loans = (typeof App.loanPayments === 'function' ? App.loanPayments() : []).map(x => ({ ...x, auto: true }));
+  return [...own, ...loans].filter(x => x.aktivni !== false && +x.castka > 0);
+};
+const rpYm = d => d.slice(0, 7);
+const rpAddMonths = (ym, n) => { const [y, m] = ym.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return d.toISOString().slice(0, 7) };
+const rpDueIn = (it, ym) => { const [, k] = RP_FREQ[it.freq || 'm']; if (k === 1) return true; const start = +(it.mesic || 1); const m = +ym.slice(5); return ((m - start) % k + k) % k === 0 };
+const rpDueDate = (it, ym) => { const [y, m] = ym.split('-').map(Number); const last = new Date(Date.UTC(y, m, 0)).getUTCDate(); return `${ym}-${String(Math.min(+it.den || 1, last)).padStart(2, '0')}` };
+const rpDays = (a, b) => Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 864e5);
+function rpReadTx() { try { const s = JSON.parse(App.raw.get('rodinny-rozpocet-v1') || 'null'); return s && !s.sample && Array.isArray(s.tx) ? s.tx : [] } catch (e) { return [] } }
+/** Stav platby v daném měsíci: {due, date, paid:{date, how, amount}|null, state:'ok'|'wait'|'late'|'skip'} */
+function rpStatus(it, ym, tx, used) {
+  if (!rpDueIn(it, ym)) return { due: false, state: 'skip' };
+  const date = rpDueDate(it, ym), td = App.today(), amt = +it.castka;
+  const man = RP.get('rucne', {})[it.id + '|' + ym];
+  if (man) return { due: true, date, state: 'ok', paid: { date: man, how: 'ručně' } };
+  const kw = rpNorm(it.klic || '').split(',').map(x => x.trim()).filter(Boolean);
+  const txt = t => rpNorm(t.party + ' ' + t.desc + ' ' + (t.note || '') + ' ' + (t.acc || '') + ' ' + (t.vs || ''));
+  const hit = tx.find(t => {
+    if (t.amount >= 0 || used.has(t.id) || Math.abs(rpDays(date, t.date)) > 12) return false;
+    const d = Math.abs(-t.amount - amt), kwHit = kw.length && kw.some(k => txt(t).includes(k));
+    return (d <= Math.max(1, amt * 0.02) && (!kw.length || kwHit)) || (kwHit && d <= amt * 0.1);
+  });
+  if (hit) { used.add(hit.id); return { due: true, date, state: 'ok', paid: { date: hit.date, how: 'výpis', amount: -hit.amount } } }
+  return { due: true, date, state: date < td ? 'late' : 'wait' };
+}
+function rpMonth(ym) {
+  const tx = rpReadTx(), used = new Set();
+  return rpItems().map(it => ({ it, ...rpStatus(it, ym, tx, used) })).filter(x => x.due).sort((a, b) => a.date.localeCompare(b.date));
+}
+/** Návrhy z výpisů: stejná protistrana a podobná částka aspoň ve 3 různých měsících. */
+function rpSuggest() {
+  const tx = rpReadTx().filter(t => t.amount < 0), groups = {};
+  for (const t of tx) { const k = rpNorm(t.party || t.desc).replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 40); if (!k) continue; (groups[k] = groups[k] || []).push(t) }
+  const have = rpItems().map(x => rpNorm(x.nazev + ' ' + (x.klic || '')));
+  const out = [];
+  for (const [k, L] of Object.entries(groups)) {
+    const months = new Set(L.map(t => rpYm(t.date))); if (months.size < 3) continue;
+    const amts = L.map(t => -t.amount).sort((a, b) => a - b), med = amts[Math.floor(amts.length / 2)];
+    const similar = L.filter(t => Math.abs(-t.amount - med) <= med * 0.05); if (new Set(similar.map(t => rpYm(t.date))).size < 3) continue;
+    const day = Math.round(similar.reduce((s, t) => s + +t.date.slice(8), 0) / similar.length);
+    if (have.some(h => h.includes(k.split(' ')[0]))) continue;
+    out.push({ nazev: L[0].party || L[0].desc, castka: Math.round(med), den: day, klic: k.split(' ').slice(0, 2).join(' '), pocet: new Set(similar.map(t => rpYm(t.date))).size });
+  }
+  return out.sort((a, b) => b.castka - a.castka).slice(0, 12);
+}
+App.regularPayments = rpMonth;   // pro asistenta a další moduly
+
+function rpWidget() {
+  const L = rpMonth(App.today().slice(0, 7)); if (!L.length) return '';
+  const late = L.filter(x => x.state === 'late'), wait = L.filter(x => x.state === 'wait'), ok = L.filter(x => x.state === 'ok');
+  const nx = late[0] || wait[0];
+  return `<span class="wnote" style="display:block;margin-top:6px">Pravidelné platby: <b>${ok.length} z ${L.length}</b> zaplaceno${late.length ? ` · <b style="color:var(--exp)">${late.length} po splatnosti</b>` : ''}${nx ? ` · další ${App.esc(nx.it.nazev)} ${App.fmt.date(nx.date)}` : ''}</span>`;
+}
 /* Shrnutí pro přehled – čte uložená data bez spuštění celého modulu */
 function summary() {
   let s; try { s = JSON.parse(App.raw.get('rodinny-rozpocet-v1') || 'null') } catch (e) { s = null }
@@ -103,6 +171,13 @@ function summary() {
 
 /* Nástroje pro asistenta – čtou uložená data rozpočtu */
 function budgetTools() {
+  const rpTool = { name: 'payments_due', description: 'Pravidelné měsíční platby (nájem, energie, pojištění, splátky…) a jejich stav v zadaném měsíci: zaplaceno podle výpisu / ručně, čeká na zaplacení (kolik dní zbývá), po splatnosti.',
+    inputSchema: { type: 'object', properties: { mesic: { type: 'string', description: 'YYYY-MM, výchozí aktuální měsíc' } } },
+    run: inp => { const ym = /^\d{4}-\d{2}$/.test(inp.mesic || '') ? inp.mesic : App.today().slice(0, 7); const L = rpMonth(ym);
+      return { mesic: ym, celkem: Math.round(L.reduce((s, x) => s + +x.it.castka, 0)), platby: L.map(x => ({ nazev: x.it.nazev, castka: +x.it.castka, splatnost: x.date, stav: { ok: 'zaplaceno', wait: 'čeká', late: 'po splatnosti' }[x.state], zaplaceno: x.paid?.date, jak: x.paid?.how, zpusob: x.it.zpusob === 'trvaly' ? 'trvalý příkaz / inkaso' : 'platím ručně' })) } } };
+  return [rpTool, ...budgetTools0()];
+}
+function budgetTools0() {
   const read = () => { let s; try { s = JSON.parse(App.raw.get('rodinny-rozpocet-v1') || 'null') } catch (e) { s = null } if (!s || !s.tx || !s.tx.length) throw new Error('V rozpočtu zatím nejsou žádná data. Nahrajte výpis z banky.'); return s };
   const nt = x => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const ctx = s => { const cats = {}; (s.cats || []).forEach(c => cats[c.id] = c); return { cats, isTr: t => cats[t.cat]?.type === 'transfer', name: id => cats[id]?.name || id } };
@@ -134,13 +209,13 @@ App.register({
 
   widget(el) {
     const s = summary();
-    if (!s) { el.innerHTML = '<span class="wnote">Zatím žádná data. Otevřete modul a nahrajte výpis z banky.</span>'; return }
+    if (!s) { el.innerHTML = '<span class="wnote">Zatím žádná data. Otevřete modul a nahrajte výpis z banky.</span>' + rpWidget(); return }
     const L = s.last, mx = Math.max(1, ...s.hist.map(h => Math.abs(h.b)));
     el.innerHTML = `<div class="lbl">${App.MONTHS[+L.m.slice(5) - 1]} ${L.m.slice(0, 4)}${s.sample ? ' · ukázková data' : ''}</div>
       <div class="wnums"><div><span>Příjmy</span><b class="inc" data-count="${L.i}"></b></div><div><span>Výdaje</span><b class="exp" data-count="${L.e}"></b></div>
       <div><span>Bilance</span><b class="${L.b >= 0 ? 'inc' : 'exp'}" data-count="${L.b}"></b></div></div>
       <div class="minibars" title="Bilance posledních měsíců">${s.hist.map((h, k) => `<i class="${h.b < 0 ? 'neg' : ''}" style="height:${Math.max(4, Math.abs(h.b) / mx * 100)}%;animation-delay:${k * 60}ms" title="${App.MONTHS[+h.m.slice(5) - 1]}: ${App.fmt.czk(h.b)}"></i>`).join('')}</div>
-      <span class="wnote">Bilance posledních ${s.hist.length} měsíců</span>`;
+      <span class="wnote">Bilance posledních ${s.hist.length} měsíců</span>${rpWidget()}`;
   },
 
   mount(root) {
@@ -387,7 +462,7 @@ function monthsSpan(list){
   const [a,b]=[ms[0],ms[ms.length-1]];return (+b.slice(0,4)-+a.slice(0,4))*12+(+b.slice(5)-+a.slice(5))+1;
 }
 function render(){
-  $('sampleBanner').hidden=!state.sample;
+  $('sampleBanner').hidden=!state.sample;if(typeof renderRP==='function'&&$('rpPanel'))setTimeout(()=>renderRP());
   renderFilters();
   const list=scoped();const real=list.filter(t=>!isTr(t));
   const inc=real.filter(t=>t.amount>0).reduce((a,t)=>a+t.amount,0);
@@ -620,8 +695,67 @@ function renderTicker(list,real,inc,exp,bal,mcount){
   $('tk').style.animationDuration=Math.max(25,items.length*9)+'s';
 }
 
-render();
 
+/* ---------- pravidelné platby: panel ---------- */
+let rpYmSel=App.today().slice(0,7), rpEdit=false;
+const RPCSS=`#rpPanel .rp-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:6px 14px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+#rpPanel .rp-row:last-child{border-bottom:0}
+#rpPanel .rp-dot{width:12px;height:12px;border-radius:50%;background:var(--muted)}
+#rpPanel .ok .rp-dot{background:var(--inc);box-shadow:0 0 8px var(--inc)}#rpPanel .late .rp-dot{background:var(--exp);box-shadow:0 0 8px var(--exp);animation:blink 1.4s infinite}#rpPanel .wait .rp-dot{background:var(--warn)}
+#rpPanel .rp-n b{display:block}#rpPanel .rp-n span{font-size:12px;color:var(--muted)}
+#rpPanel .rp-a{font-family:var(--f-mono);text-align:right}
+#rpPanel .rp-s{font-size:12px;text-align:right;min-width:150px}
+#rpPanel .rp-nav{display:flex;align-items:center;gap:6px}
+#rpPanel .rp-ed{width:100%;border-collapse:collapse;font-size:13px}#rpPanel .rp-ed td{padding:4px 4px;border-bottom:1px solid var(--line)}#rpPanel .rp-ed input,#rpPanel .rp-ed select{width:100%;min-width:60px;padding:5px 7px}
+@media (max-width:640px){#rpPanel .rp-row{grid-template-columns:auto minmax(0,1fr) auto}#rpPanel .rp-s{grid-column:2/-1;text-align:left;min-width:0}#rpPanel .rp-row .btn{grid-column:2/-1;justify-self:start}}`;
+App.css('rozpocet-rp',RPCSS);
+function renderRP(){
+  const P=$('rpPanel'); if(!P)return;
+  const ym=rpYmSel, L=rpMonth(ym), td=App.today(), own=RP.get('pravidelne',[]), manual=RP.get('rucne',{});
+  const ok=L.filter(x=>x.state==='ok'), late=L.filter(x=>x.state==='late');
+  const left=L.filter(x=>x.state!=='ok').reduce((a,x)=>a+ +x.it.castka,0), total=L.reduce((a,x)=>a+ +x.it.castka,0);
+  const yearly=rpItems().reduce((a,x)=>a+ +x.castka*12/RP_FREQ[x.freq||'m'][1],0);
+  const rel=d=>{const n=rpDays(td,d);return n===0?'dnes':n===1?'zítra':n>0?`za ${n} dní`:n===-1?'včera':`před ${-n} dny`};
+  const noTx=!rpReadTx().length;
+  P.innerHTML=`<div class="phead"><h2>Pravidelné platby</h2><div class="rp-nav"><button class="btn sm" id="rpPrev" aria-label="Předchozí měsíc">‹</button><b style="min-width:120px;text-align:center">${MONF[+ym.slice(5)-1]} ${ym.slice(0,4)}</b><button class="btn sm" id="rpNext" aria-label="Další měsíc">›</button></div></div>
+    ${L.length?`<p class="muted" style="margin:0 0 6px">Zaplaceno <b style="color:var(--inc)">${ok.length} z ${L.length}</b> · zbývá zaplatit <b>${fmt0.format(left)}</b> z ${fmt0.format(total)}${late.length?` · <b style="color:var(--exp)">${late.length} po splatnosti</b>`:''} · ročně celkem ${fmt0.format(yearly)}</p>
+    <div>${L.map(x=>`<div class="rp-row ${x.state}"><i class="rp-dot" aria-hidden="true"></i>
+      <span class="rp-n"><b>${esc(x.it.nazev)}</b><span>${x.it.auto?'z modulu Hypotéka · ':''}${x.it.zpusob==='trvaly'?'trvalý příkaz / inkaso':'platím ručně'}${x.it.freq&&x.it.freq!=='m'?' · '+RP_FREQ[x.it.freq][0]:''}${x.it.pozn?' · '+esc(x.it.pozn):''}</span></span>
+      <span class="rp-a">${fmt0.format(x.it.castka)}</span>
+      <span class="rp-s">${x.state==='ok'?`<span style="color:var(--inc)">zaplaceno ${fmtD(x.paid.date)}</span><br><span class="muted">${x.paid.how==='výpis'?'podle výpisu'+(Math.abs(x.paid.amount-x.it.castka)>1?' ('+fmt0.format(x.paid.amount)+')':''):'označeno ručně'}</span>`:x.state==='late'?`<span style="color:var(--exp)">splatné ${fmtD(x.date)}</span><br><span class="muted">${rel(x.date)}</span>`:`splatné ${fmtD(x.date)}<br><span class="muted">${rel(x.date)}</span>`}</span>
+      ${x.state==='ok'&&x.paid.how==='výpis'?'<span></span>':`<button class="btn sm" data-rpmark="${esc(x.it.id)}">${x.state==='ok'?'Zrušit':'Zaplaceno'}</button>`}</div>`).join('')}</div>`
+    :`<p class="muted" style="margin:0">${own.length?'V tomto měsíci nic není splatné.':'Zatím tu nic není. Přidejte platby, na které nechcete zapomenout – nájem, energie, pojištění, školka, předplatné…'}</p>`}
+    ${noTx&&L.length?'<p class="muted" style="font-size:12px;margin:6px 0 0">Bez nahraných výpisů se zaplacení pozná jen podle ručního odškrtnutí.</p>':''}
+    <details style="margin-top:12px" ${rpEdit||!own.length?'open':''} id="rpDet"><summary class="muted" style="cursor:pointer">Upravit seznam plateb</summary>
+      <div class="tablebox" style="margin-top:8px"><table class="rp-ed"><thead><tr><th>Název</th><th>Částka Kč</th><th>Den</th><th>Jak často</th><th>Od měsíce</th><th>Platím</th><th>Poznat ve výpisu podle</th><th></th></tr></thead><tbody>
+      ${own.map((x,i)=>`<tr><td><input data-rp="${i}.nazev" value="${esc(x.nazev)}" aria-label="Název"></td><td><input type="number" step="1" min="0" data-rp="${i}.castka" value="${x.castka}" style="width:100px" aria-label="Částka"></td>
+        <td><input type="number" min="1" max="31" data-rp="${i}.den" value="${x.den}" style="width:60px" aria-label="Den v měsíci"></td>
+        <td><select data-rp="${i}.freq" aria-label="Jak často">${Object.entries(RP_FREQ).map(([k,[l]])=>`<option value="${k}"${(x.freq||'m')===k?' selected':''}>${l}</option>`).join('')}</select></td>
+        <td><select data-rp="${i}.mesic" aria-label="Od měsíce"${(x.freq||'m')==='m'?' disabled':''}>${MONF.map((m,j)=>`<option value="${j+1}"${+(x.mesic||1)===j+1?' selected':''}>${m}</option>`).join('')}</select></td>
+        <td><select data-rp="${i}.zpusob" aria-label="Způsob"><option value="rucne"${x.zpusob!=='trvaly'?' selected':''}>ručně</option><option value="trvaly"${x.zpusob==='trvaly'?' selected':''}>trvalý příkaz / inkaso</option></select></td>
+        <td><input data-rp="${i}.klic" value="${esc(x.klic||'')}" placeholder="např. ČEZ, VS 123" aria-label="Klíčová slova"></td>
+        <td><button class="btn sm danger" data-rpdel="${i}" aria-label="Smazat">×</button></td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="acts" style="margin-top:8px"><button class="btn sm primary" id="rpAdd">+ Přidat platbu</button><button class="btn sm" id="rpSug">Najít ve výpisech</button></div>
+      <div id="rpSugBox"></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Zaplaceno se pozná samo, když ve výpisu najdu platbu se stejnou částkou (±2 %) do 12 dnů od splatnosti. Když se částka mění (energie), vyplňte „Poznat ve výpisu podle“ – název příjemce, část zprávy nebo VS. Splátku hypotéky doplňuje modul Hypotéka sám.</p>
+    </details>`;
+  $('rpPrev').onclick=()=>{rpYmSel=rpAddMonths(rpYmSel,-1);renderRP()};
+  $('rpNext').onclick=()=>{rpYmSel=rpAddMonths(rpYmSel,1);renderRP()};
+  const saveOwn=a=>{RP.set('pravidelne',a);rpEdit=true;renderRP()};
+  P.querySelectorAll('[data-rpmark]').forEach(b=>b.onclick=()=>{const k=b.dataset.rpmark+'|'+ym, m=RP.get('rucne',{});if(m[k])delete m[k];else m[k]=td.startsWith(ym)?td:rpDueDate(rpItems().find(x=>x.id===b.dataset.rpmark)||{den:1},ym);RP.set('rucne',m);renderRP();toast(m[k]?'Označeno jako zaplacené.':'Označení zrušeno.')});
+  P.querySelectorAll('[data-rp]').forEach(i=>i.onchange=()=>{const [ix,f]=i.dataset.rp.split('.'),a=RP.get('pravidelne',[]);a[+ix][f]=i.type==='number'?(+i.value||0):i.value;saveOwn(a)});
+  P.querySelectorAll('[data-rpdel]').forEach(b=>b.onclick=()=>{const a=RP.get('pravidelne',[]);a.splice(+b.dataset.rpdel,1);saveOwn(a)});
+  $('rpAdd').onclick=()=>{const a=RP.get('pravidelne',[]);a.push({id:'p'+Date.now().toString(36),nazev:'Nová platba',castka:0,den:15,freq:'m',zpusob:'rucne',klic:''});saveOwn(a);setTimeout(()=>{const inp=P.querySelectorAll('[data-rp$=".nazev"]');inp[inp.length-1]?.select()},0)};
+  $('rpSug').onclick=()=>{const S=rpSuggest(),box=$('rpSugBox');
+    box.innerHTML=S.length?`<div class="lbl" style="margin:10px 0 4px">Opakuje se ve výpisech</div>${S.map((x,i)=>`<div class="taxrow"><span>${esc(x.nazev)} · ${fmt0.format(x.castka)} · kolem ${x.den}. dne · ${x.pocet} měsíců</span><button class="btn sm" data-rpsug="${i}">Přidat</button></div>`).join('')}`:`<p class="muted">${rpReadTx().length?'Ve výpisech jsem nenašel nic dalšího, co by se opakovalo každý měsíc.':'Nejdřív nahrajte výpisy z banky.'}</p>`;
+    box.querySelectorAll('[data-rpsug]').forEach(b=>b.onclick=()=>{const x=S[+b.dataset.rpsug],a=RP.get('pravidelne',[]);a.push({id:'p'+Date.now().toString(36),nazev:x.nazev,castka:x.castka,den:x.den,freq:'m',zpusob:'trvaly',klic:x.klic});saveOwn(a);toast(`Přidáno: ${x.nazev}`)})};
+  $('rpDet').ontoggle=e=>{rpEdit=e.target.open};
+}
+
+render();renderRP();
+const rpOff=App.bus.on('store:change',e=>{if(e&&e.ns==='hypoteka')renderRP()});
+return ()=>rpOff();
   }
 });
 })();
