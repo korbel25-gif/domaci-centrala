@@ -3,7 +3,7 @@
    Portfolio akcií/ETF, FIFO loty, časový test (3 roky), limit 100 000 Kč,
    dividendy, alokace. Ceny a kurzy se zadávají ručně (zatím bez online cen).
    Data: App.store('investice') → klíč 'data'
-   Nápad na rozšíření: import exportu z XTB (xlsx) do funkce importXTB().
+   Import z XTB: export historie účtu z xStation 5 (XLSX/CSV) → parseXTB().
    ===================================================================== */
 (function () {
   const { fmt, esc } = App;
@@ -50,7 +50,10 @@
   const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 864e5);
 
   /* ---------- výpočty (FIFO) ---------- */
-  function calc(d) {
+  /** Komu patří lot: 'Vlastní' nebo jméno investičního plánu (Mikuláš, …). */
+  const planName = (d, k) => (d.plans || {})[k]?.name || 'Plán ' + String(k).split(':')[1];
+  const ownerOf = (d, pos) => { const k = (d.planPos || {})[pos]; return k ? planName(d, k) : 'Vlastní' };
+  function calc(d, owner) {
     const fxOf = c => d.fx[c] || 1;
     const P = {}, realized = [], divs = [], buys = [];
     const txs = [...d.txs].sort((a, b) => a.date.localeCompare(b.date) || (a.type === 'buy' ? -1 : 1));
@@ -59,19 +62,22 @@
       if (t.name) p.name = t.name;
       const fx = +t.fx || fxOf(t.ccy);
       if (t.type === 'buy') {
-        p.lots.push({ date: t.date, qty: +t.qty, price: +t.price, fx, feePer: (+t.fee || 0) / (+t.qty || 1) }); p.last = +t.price;
+        p.lots.push({ date: t.date, qty: +t.qty, price: +t.price, fx, feePer: (+t.fee || 0) / (+t.qty || 1), pos: t.pos || '' }); p.last = +t.price;
         buys.push({ date: t.date, czk: t.qty * t.price * fx + (+t.fee || 0) });
       } else if (t.type === 'sell') {
         let q = +t.qty; const feePer = (+t.fee || 0) / (q || 1); p.last = +t.price;
-        while (q > 1e-9 && p.lots.length) {
-          const L = p.lots[0], take = Math.min(q, L.qty);
+        while (q > 1e-6 && p.lots.length) {
+          // XTB uvádí, kterou pozici prodej uzavřel (Position ID) – pak se bere ta, jinak nejstarší (FIFO)
+          const li = t.pos ? Math.max(0, p.lots.findIndex(l => l.pos === t.pos)) : 0;
+          const L = p.lots[li], take = Math.min(q, L.qty);
           realized.push({ ticker: t.ticker, buy: L.date, sell: t.date, qty: take, cost: take * (L.price * L.fx + L.feePer), proceeds: take * t.price * fx, fee: take * feePer, exempt: t.date >= exemptFrom(L.date) });
-          L.qty -= take; q -= take; if (L.qty <= 1e-9) p.lots.shift();
+          L.qty -= take; q -= take; if (L.qty <= 1e-6) p.lots.splice(li, 1);
         }
       } else if (t.type === 'div') divs.push({ ...t, czk: (+t.price) * fx });
     }
+    if (owner) for (const p of Object.values(P)) p.lots = p.lots.filter(l => ownerOf(d, l.pos) === owner);
     const pos = Object.values(P).map(p => {
-      const qty = p.lots.reduce((s, l) => s + l.qty, 0); if (qty <= 1e-9) return null;
+      const qty = p.lots.reduce((s, l) => s + l.qty, 0); if (qty <= 1e-6) return null;
       const cost = p.lots.reduce((s, l) => s + l.qty * (l.price * l.fx + l.feePer), 0);
       const avg = p.lots.reduce((s, l) => s + l.qty * l.price, 0) / qty;
       const pr = d.prices[p.ticker]?.price ?? p.last;
@@ -90,8 +96,8 @@
     const taxable = r.filter(x => !x.exempt);
     const gain = taxable.reduce((s, x) => s + x.proceeds - x.cost - x.fee, 0);
     const base = underLimit ? 0 : Math.max(0, gain);
-    const divs = c.divs.filter(x => x.date.startsWith(String(y))).reduce((s, x) => s + x.czk, 0);
-    return { r, gross, underLimit, exemptGain: r.filter(x => x.exempt).reduce((s, x) => s + x.proceeds - x.cost - x.fee, 0), gain, base, tax: base * TAX_RATE, divs };
+    const dy = c.divs.filter(x => x.date.startsWith(String(y))), divs = dy.reduce((s, x) => s + x.czk, 0), wht = dy.reduce((s, x) => s + (+x.wht || 0) * (+x.fx || 1), 0);
+    return { wht, r, gross, underLimit, exemptGain: r.filter(x => x.exempt).reduce((s, x) => s + x.proceeds - x.cost - x.fee, 0), gain, base, tax: base * TAX_RATE, divs };
   }
 
   /* ---------- ukázková data ---------- */
@@ -113,6 +119,165 @@
     while (d <= end) { const pr = Math.round((88 + k * 0.55 + Math.sin(k / 3) * 3) * 100) / 100; add(d, 'buy', 'VWCE', 'Vanguard FTSE All-World', 2, pr, 'EUR', 24.5 - k * 0.003, 0); d = addDays(d, 14); k++ }
     return { sample: true, txs: t, fx: { ...FX0 }, prices: { VWCE: { price: 141.2, date: end }, AAPL: { price: 262, date: end }, MSFT: { price: 498, date: end }, CEZ: { price: 1085, date: end } } };
   }
+
+  /* ---------- import z XTB ----------
+     Zdroj: xStation 5 → Historie účtu → Export (XLSX). Čte list s hotovostními operacemi
+     (nákupy, prodeje, dividendy, srážková daň) a z otevřených pozic aktuální ceny.
+     Částky jsou v měně účtu (Kč); kurz se dopočítá z částky ÷ (kusy × cena), takže obsahuje i poplatek za směnu. */
+  /* Jednotné kurzy GFŘ (Kč za 1 jednotku) – pro přepočet obchodů z účtů v USD/EUR. Doplňte další rok, až vyjde pokyn (leden).
+     Pro rok, který tu chybí, se použije kurz ze záložky Kurzy. */
+  const JK = { 2023: { EUR: 23.97, USD: 22.14, GBP: 27.59, CHF: 24.69, PLN: 5.31 }, 2024: { EUR: 25.16, USD: 23.28, GBP: 29.78, CHF: 26.40, PLN: 5.85 }, 2025: { EUR: 24.66, USD: 21.84, GBP: 28.80, CHF: 26.33, PLN: 5.82 } };
+  function czkRate(ccy, date, fx, conv = []) {
+    if (ccy === 'CZK') return 1;
+    const y = String(date).slice(0, 4); if ((JK[y] || {})[ccy]) return JK[y][ccy];
+    const c = conv.filter(x => x.ccy === ccy && x.date.startsWith(y));   // rok bez jednotného kurzu: průměr vašich směn v XTB
+    return c.length ? Math.round(c.reduce((s, x) => s + x.rate, 0) / c.length * 1e4) / 1e4 : fx[ccy] || 1;
+  }
+  const SUFFIX_CCY = { US: 'USD', UK: 'GBX', DE: 'EUR', NL: 'EUR', FR: 'EUR', IT: 'EUR', ES: 'EUR', BE: 'EUR', PT: 'EUR', IE: 'EUR', FI: 'EUR', AT: 'EUR', CZ: 'CZK', PL: 'PLN', CH: 'CHF', DK: 'DKK', SE: 'SEK', NO: 'NOK' };
+  const xnum = v => typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/\s| /g, '').replace(/,(?=\d+$)/, '.').replace(/,/g, ''));
+  const nt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  function xdate(v) {
+    if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;   // SheetJS vrací místní čas buňky
+    if (typeof v === 'number') return new Date(Math.floor(v - 25569) * 864e5).toISOString().slice(0, 10);
+    const t = String(v || '').trim(); let m;
+    if ((m = t.match(/^(\d{4})-(\d{2})-(\d{2})/))) return `${m[1]}-${m[2]}-${m[3]}`;
+    if ((m = t.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})/))) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    return '';
+  }
+  function findHeader(rows, need) {
+    for (let i = 0; i < Math.min(rows.length, 40); i++) {
+      const h = rows[i].map(nt), col = {};
+      for (const [k, re] of Object.entries(need)) { const j = h.findIndex(x => re.test(x)); if (j >= 0) col[k] = j }
+      if (Object.keys(need).every(k => k in col)) return { at: i, col, h };
+    }
+    return null;
+  }
+  /** sheets = { název listu: řádky jako pole }, fname = název souboru (XTB ho začíná měnou účtu).
+      Vrací obchody, dividendy, ceny z otevřených pozic a pohyby peněz na účtu. */
+  function parseXTB(sheets, fname = '') {
+    const out = { txs: [], prices: {}, open: {}, skipped: {}, unknown: [], wht: 0, sheet: '', acc: '', account: '',
+      conv: [], plans: [], cash: { vklady: 0, vybery: 0, prevodyIn: 0, prevodyOut: 0, uroky: 0, danUroky: 0, cfd: 0, poplatky: 0, zustatek: null } };
+    const fm = String(fname).match(/(?:^|[\\/])(CZK|USD|EUR|GBP|PLN)_(\d+)/i); if (fm) { out.acc = fm[1].toUpperCase(); out.account = fm[2] }
+    if (!out.acc) for (const rows of Object.values(sheets)) {   // nebo z tabulky souhrnu (sloupec Currency / Měna)
+      for (let k = 0; k < Math.min(rows.length, 15) && !out.acc; k++) { const i = rows[k].findIndex(c => /^(currency|mena)$/.test(nt(c))); if (i >= 0) { const v = String((rows[k + 1] || [])[i] || '').trim().toUpperCase(); if (/^[A-Z]{3}$/.test(v)) out.acc = v } }
+      if (out.acc) break;
+    }
+    const col = (h, re) => h.findIndex(x => re.test(x));
+    for (const [name, rows] of Object.entries(sheets)) {
+      const H = findHeader(rows, { type: /^(type|typ)$/, comment: /^(comment|komentar|popis)$/, amount: /^(amount|castka)$/ });
+      if (!H) continue;
+      out.sheet = name;
+      if (!out.account) { const r = rows.slice(0, H.at).find(r => /account number|cislo uctu/.test(nt(r[0]))); if (r) out.account = String(r[1] || '').trim() }
+      const tcol = col(H.h, /^(time|cas|datum|date)$/), scol = (i => i >= 0 ? i : col(H.h, /^(symbol|instrument|nastroj)$/))(col(H.h, /^(ticker|symbol)$/));
+      const ncol = col(H.h, /^(instrument|nazev)$/), icol = col(H.h, /^id$/), pcol = col(H.h, /^position id$/), ccol = col(H.h, /^(category|kategorie)$/);
+      const whts = [], ev = [], subs = {}, prcol = col(H.h, /^(product|produkt)$/);
+      for (const r of rows.slice(H.at + 1)) {
+        const type = nt(r[H.col.type]), com = String(r[H.col.comment] ?? '').trim(), amt = xnum(r[H.col.amount]);
+        if (!type || !isFinite(amt)) continue;
+        if (/^(total|celkem)$/.test(type)) { out.cash.zustatek = Math.round(amt * 100) / 100; continue }
+        const sym = String((scol >= 0 ? r[scol] : '') || (com.match(/^(?:corr\s+)?([A-Z0-9\-]+\.[A-Z]{2})\b/) || [])[1] || '').trim().toUpperCase();
+        const date = xdate(tcol >= 0 ? r[tcol] : ''), id = icol >= 0 ? String(r[icol] ?? '').trim() : '', pos = pcol >= 0 ? String(r[pcol] ?? '').trim() : '';
+        const nm = ncol >= 0 && ncol !== scol ? String(r[ncol] || '').trim() : '';
+        const cat = ccol >= 0 ? nt(r[ccol]) : '';
+        const ts = tcol >= 0 && r[tcol] instanceof Date ? r[tcol].getTime() : 0, ip = prcol >= 0 && /investment plan|investicni plan/.test(nt(r[prcol]));
+        const tm = com.match(/^Transfer from (\d+) to (\d+)/i);   // vnitřní přesun mezi hlavním účtem a investičním plánem
+        if (tm && ip) {
+          const sub = amt >= 0 ? tm[2] : tm[1], S = subs[sub] || (subs[sub] = { sub, vlozeno: 0, vybrano: 0, od: date, do: date });
+          if (amt >= 0) { S.vlozeno += amt; ev.push({ ts, k: 'in', sub }) } else S.vybrano += -amt;
+          if (date < S.od) S.od = date; if (date > S.do) S.do = date;
+        }
+        if (tm) { out.skipped['přesuny do investičních plánů'] = (out.skipped['přesuny do investičních plánů'] || 0) + 1; continue }
+        const [base, suf] = sym.includes('.') ? [sym.slice(0, sym.lastIndexOf('.')), sym.slice(sym.lastIndexOf('.') + 1)] : [sym, ''];
+        const m = com.match(/(OPEN|CLOSE)\s+(BUY|SELL)\s+(?:(?=\S*[A-Z])\S+\s+)?([\d.,]+)(?:\s*\/\s*[\d.,]+)?\s*@\s*([\d.,]+)/i);
+        if (m && sym && date && cat !== 'cfd') {
+          const qty = xnum(m[3]), price = xnum(m[4]), kind = m[1].toUpperCase() === 'OPEN' ? 'buy' : 'sell';
+          if (!(qty > 0 && price > 0)) { out.unknown.push(com); continue }
+          const fxA = Math.abs(amt) / (qty * price);
+          out.txs.push({ xtb: id || `${date}|${sym}|${kind}|${qty}|${amt}`, date, type: kind, ticker: base, name: nm || sym, sym, pos, qty, price, ccy: SUFFIX_CCY[suf] || 'USD', fxA, fee: 0 });
+          if (ip && kind === 'buy' && ts) ev.push({ ts, k: 'buy', pos });
+        } else if (/divid/.test(type) && sym && date) {
+          out.txs.push({ xtb: id || `${date}|${sym}|div|${amt}`, date, type: 'div', ticker: base, name: nm || sym, sym, pos, qty: 0, price: Math.round(amt * 100) / 100, ccy: '', fee: 0, wht: 0 });
+        } else if (/withholding|wht|srazkov/.test(type) && sym) {
+          whts.push({ base, pos, date, v: -amt }); out.wht += -amt;
+        } else {
+          const C = out.cash;
+          if (/^deposit|^vklad/.test(type)) C.vklady += amt;
+          else if (/^withdraw|^vyber/.test(type)) C.vybery += -amt;
+          else if (/^subaccount/.test(type)) { /* přesun mezi Moje obchody a Investiční plány – v součtu nula */ }
+          else if (/^transfer|prevod/.test(type)) {
+            if (amt >= 0) C.prevodyIn += amt; else C.prevodyOut += -amt;
+            const cm = com.match(/conversion,\s*([A-Z]{3}) to ([A-Z]{3}).*?rate:\s*([\d.]+)/i);   // skutečný kurz směny
+            if (cm && date && +cm[3] > 0) { const [f, t, r] = [cm[1].toUpperCase(), cm[2].toUpperCase(), +cm[3]]; if (f === 'CZK' && t !== 'CZK') out.conv.push({ date, ccy: t, rate: Math.round(1 / r * 1e4) / 1e4 }); else if (t === 'CZK') out.conv.push({ date, ccy: f, rate: r }) }
+          }
+          else if (/interest tax|dan z uroku/.test(type)) C.danUroky += -amt;
+          else if (/interest|urok/.test(type)) C.uroky += amt;
+          else if (/close trade|swap|rollover/.test(type) || cat === 'cfd') C.cfd += amt;
+          else if (/fee|poplatek|commission/.test(type)) C.poplatky += -amt;
+          else { out.unknown.push(`${r[H.col.type]}: ${com}`); continue }
+          const k = /^deposit/.test(type) ? 'vklady' : /^withdraw/.test(type) ? 'výběry' : /^subaccount/.test(type) ? 'přesuny mezi podúčty' : /^transfer/.test(type) ? 'převody mezi účty' : /interest/.test(type) ? 'úroky' : cat === 'cfd' || /close trade|swap/.test(type) ? 'CFD' : 'poplatky';
+          out.skipped[k] = (out.skipped[k] || 0) + 1;
+        }
+      }
+      // srážková daň k dividendě: stejná pozice a den (v souboru bývá daň dřív než dividenda)
+      const divs = out.txs.filter(t => t.type === 'div');
+      for (const w of whts) {
+        const d = divs.find(x => x.ticker === w.base && x.pos && x.pos === w.pos && x.date === w.date) || divs.find(x => x.ticker === w.base && Math.abs(daysBetween(x.date, w.date || x.date)) <= 3 && Math.sign(x.price) === Math.sign(w.v));
+        if (d) d.wht = Math.round((d.wht + w.v) * 100) / 100;
+      }
+      for (const k of Object.keys(out.cash)) if (out.cash[k] != null) out.cash[k] = Math.round(out.cash[k] * 100) / 100;
+      // nákup do minuty po vkladu do jediného plánu → víme, kterému plánu pozice patří
+      ev.sort((a, b) => a.ts - b.ts); const anchor = {};
+      ev.forEach((e, i) => { if (e.k !== 'buy') return; const w = new Set(ev.slice(0, i).filter(x => x.k === 'in' && e.ts - x.ts <= 60000).map(x => x.sub)); if (w.size === 1) anchor[e.pos] = [...w][0] });
+      out.anchor = anchor;
+      out.plans = Object.values(subs).map(S => ({ ...S, vlozeno: Math.round(S.vlozeno * 100) / 100, vybrano: Math.round(S.vybrano * 100) / 100, lots: [] }));
+    }
+    // aktuální ceny a držené kusy z listu otevřených pozic
+    for (const [name, rows] of Object.entries(sheets)) {
+      if (!/open|otevr/i.test(name)) continue;
+      const H = findHeader(rows, { symbol: /^(ticker|symbol)$/, px: /^(current price|market price|aktualni cena|trzni cena)$/ });
+      if (!H) continue;
+      const tcol = col(H.h, /^(type|typ)$/), vcol = col(H.h, /^(volume|objem)$/), prc = col(H.h, /^(product|produkt)$/), posc = col(H.h, /^(instrument\/position|position|pozice)$/);
+      const groups = []; let g = null;   // XTB řadí pozice po plánech: každý plán = blok titulů za sebou
+      for (const r of rows.slice(H.at + 1)) {
+        const sym = String(r[H.col.symbol] || '').trim().toUpperCase(), px = xnum(r[H.col.px]); if (!sym) continue;
+        const base = sym.includes('.') ? sym.slice(0, sym.lastIndexOf('.')) : sym, isLot = tcol >= 0 && /^(buy|sell)$/i.test(String(r[tcol]).trim());
+        const plan = prc >= 0 && /investment plan|investicni plan/.test(nt(r[prc]));
+        if (!isLot) { if (plan && (!g || g.seen.has(base))) groups.push(g = { seen: new Set(), lots: [] }); if (!plan) g = null; if (g) g.seen.add(base) }
+        if (px > 0) out.prices[base] = px;
+        if (isLot && vcol >= 0) {
+          out.open[base] = Math.round(((out.open[base] || 0) + xnum(r[vcol])) * 1e4) / 1e4;
+          if (g && plan && posc >= 0) g.lots.push(String(r[posc]).trim());
+        }
+      }
+      // skupina → plán: hlasování podle známých nákupů, zbytek podle posledních vkladů
+      const A = out.anchor || {}, free = new Set(out.plans.map(p => p.sub));
+      const pick = groups.map(G => { const v = {}; G.lots.forEach(p => A[p] && (v[A[p]] = (v[A[p]] || 0) + 1)); return Object.entries(v).sort((a, b) => b[1] - a[1])[0]?.[0] });
+      pick.forEach(sub => sub && free.delete(sub));
+      const rest = out.plans.filter(p => free.has(p.sub)).sort((a, b) => b.do.localeCompare(a.do));
+      groups.forEach((G, i) => { const sub = pick[i] && out.plans.some(p => p.sub === pick[i] && !p.lots.length) ? pick[i] : rest.shift()?.sub; const P = out.plans.find(p => p.sub === sub); if (P) P.lots.push(...G.lots) });
+    }
+    return out;
+  }
+  /** Doplní kurzy do Kč podle měny účtu (CZK / USD / EUR). */
+  function toCZK(P, acc, fx, conv) {
+    return P.txs.map(t => {
+      const r = czkRate(acc, t.date, fx, conv), o = { ...t, acc, xtb: acc + ':' + t.xtb };
+      if (t.type === 'div') { o.ccy = acc; o.fx = r }
+      else { if (Math.abs(t.fxA - 1) < 0.03) o.ccy = acc; o.fx = Math.round(t.fxA * r * 1e4) / 1e4 }
+      delete o.fxA; if (t.type === 'div' || !t.pos) delete o.pos; else o.pos = acc + ':' + t.pos; return o;
+    });
+  }
+  function mergeConv(a = [], b = []) { const m = new Map(); [...a, ...b].forEach(x => m.set(x.date + x.ccy + x.rate, x)); return [...m.values()].sort((x, y) => x.date.localeCompare(y.date)) }
+  async function readXTB(file) {
+    if (/\.pdf$/i.test(file.name)) throw new Error('PDF výpis číst neumím. V xStation zvolte Historie účtu → Export a uložte XLSX.');
+    if (!window.XLSX) throw new Error('Knihovna pro Excel se nenačetla (chybí internet).');
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true }), sheets = {};
+    for (const n of wb.SheetNames) sheets[n] = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' });
+    const r = parseXTB(sheets, file.name);
+    if (!r.sheet) throw new Error('V souboru jsem nenašel hotovostní operace z XTB (sloupce Type, Comment, Amount).');
+    return r;
+  }
+  window.CentralaParseXTB = parseXTB;   // pro testy
 
   /* ---------- registrace ---------- */
   App.register({
@@ -149,7 +314,7 @@
 
     mount(root, ctx) {
       let d = load(ctx.store);
-      let tab = 'prehled';
+      let tab = 'prehled', pending = null, owner = '';
       const save = () => ctx.store.set('data', d);
       const $ = s => root.querySelector(s);
 
@@ -168,7 +333,7 @@
           <div id="invTab"></div></div>`;
         root.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; draw() });
         const T = $('#invTab');
-        if (tab === 'prehled') T.innerHTML = viewPositions(c) ;
+        if (tab === 'prehled') T.innerHTML = viewPositions(owner ? calc(d, owner) : c);
         if (tab === 'dane') T.innerHTML = viewTax(c, tx, y, td);
         if (tab === 'obchody') T.innerHTML = viewTrades();
         if (tab === 'nastaveni') T.innerHTML = viewFx();
@@ -182,20 +347,64 @@
         const months = []; const now = new Date(); for (let k = 11; k >= 0; k--) { const dt = new Date(now.getFullYear(), now.getMonth() - k, 1); months.push(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`) }
         const inv = months.map(m => c.buys.filter(b => b.date.startsWith(m)).reduce((s, b) => s + b.czk, 0)); const mx = Math.max(1, ...inv);
         return `<div style="display:flex;flex-direction:column;gap:16px;margin-top:16px">
-          <section class="panel"><div class="phead"><h2>Pozice</h2><span class="muted">Aktuální cenu přepište ručně, přepočet je okamžitý.</span></div>
+          ${owners().length > 1 ? `<div class="seg" role="group" aria-label="Čí portfolio" style="align-self:flex-start;flex-wrap:wrap">${['', ...owners()].map(o => `<button data-own="${esc(o)}" aria-pressed="${owner === o}">${o ? esc(o) : 'Vše'}</button>`).join('')}</div>` : ''}
+          <section class="panel"><div class="phead"><h2>Pozice${owner ? ' · ' + esc(owner) : ''}</h2><span class="muted">${owner ? `hodnota ${fmt.czk(c.value)} · ${c.pl >= 0 ? '+' : ''}${fmt.czk(c.pl)}` : 'Aktuální cenu přepište ručně, přepočet je okamžitý.'}</span></div>
           <div class="tablebox"><table><thead><tr><th>Titul</th><th class="amt">Kusů</th><th class="amt">Prům. nákup</th><th class="amt">Aktuální cena</th><th class="amt">Hodnota</th><th class="amt">Zisk</th><th>Časový test</th></tr></thead><tbody>
           ${c.pos.map((p, i) => `<tr><td><div class="p"><i class="dot" style="background:${PAL[i % PAL.length]};display:inline-block;margin-right:8px"></i>${esc(p.ticker)}</div><div class="x">${esc(p.name)} · ${p.ccy}</div></td>
             <td class="amt">${fmt.num(p.qty, 4)}</td><td class="amt">${fmt.num(p.avg)} ${p.ccy}</td>
             <td class="amt"><input class="inv-price" type="number" step="any" data-px="${esc(p.ticker)}" value="${p.price}" aria-label="Cena ${esc(p.ticker)}"><div class="x">${p.priceDate ? fmt.date(p.priceDate) : 'z poslední transakce'}</div></td>
             <td class="amt">${fmt.czk(p.value)}</td><td class="amt ${p.pl >= 0 ? 'inc' : 'exp'}">${p.pl > 0 ? '+' : ''}${fmt.czk(p.pl)}<div class="x">${fmt.pct(p.pl / p.cost * 100)}</div></td>
-            <td style="min-width:140px"><div class="prog ${p.exQty >= p.qty - 1e-9 ? 'done' : ''}"><b style="width:${p.exQty / p.qty * 100}%"></b></div><div class="x">${fmt.num(p.exQty, 2)} z ${fmt.num(p.qty, 2)} ks osvobozeno</div></td></tr>`).join('')}
+            <td style="min-width:140px"><div class="prog ${p.exQty >= p.qty - 1e-6 ? 'done' : ''}"><b style="width:${p.exQty / p.qty * 100}%"></b></div><div class="x">${fmt.num(p.exQty, 2)} z ${fmt.num(p.qty, 2)} ks osvobozeno</div></td></tr>`).join('')}
           </tbody></table></div></section>
+          ${owner ? '' : plansView() + accounts(c)}
           <div class="grid2">
             <section class="panel"><div class="phead"><h2>Rozložení</h2></div><div class="inv-donut"><svg viewBox="0 0 42 42"><circle r="15.915" cx="21" cy="21" fill="none" stroke="var(--track)" stroke-width="4.2"/>${segs}</svg>
               <div class="inv-leg">${c.pos.map((p, i) => `<div><i style="background:${PAL[i % PAL.length]}"></i>${esc(p.ticker)}<b>${fmt.pct(p.value / tot * 100)}</b></div>`).join('')}</div></div></section>
-            <section class="panel"><div class="phead"><h2>Vloženo za posledních 12 měsíců</h2><span class="muted num">${fmt.czk(inv.reduce((a, b) => a + b, 0))}</span></div>
+            <section class="panel"><div class="phead"><h2>Nakoupeno za posledních 12 měsíců</h2><span class="muted num">${fmt.czk(inv.reduce((a, b) => a + b, 0))}</span></div>
               <div class="bars12">${inv.map((v, k) => `<div title="${App.MONTHS[+months[k].slice(5) - 1]}: ${fmt.czk(v)}"><i style="height:${Math.max(2, v / mx * 100)}%;animation-delay:${k * 50}ms"></i><span>${App.MON[+months[k].slice(5) - 1]}</span></div>`).join('')}</div></section>
           </div></div>`;
+      }
+
+      function owners() { const k = Object.entries(d.plans || {}).filter(([, x]) => x.lots.length).map(([k]) => planName(d, k)); return k.length ? ['Vlastní', ...new Set(k)] : [] }
+      function plansView() {
+        const E = Object.entries(d.plans || {}); if (!E.length) return '';
+        const people = [...new Set(E.filter(([, x]) => x.lots.length || x.name).map(([k]) => planName(d, k)))];
+        const card = name => {
+          const ks = E.filter(([k]) => planName(d, k) === name), c2 = calc(d, name);
+          const vin = ks.reduce((s, [, x]) => s + x.vlozeno * (d.fx[x.acc] || 1), 0), vout = ks.reduce((s, [, x]) => s + x.vybrano * (d.fx[x.acc] || 1), 0), net = vin - vout, active = ks.some(([, x]) => x.lots.length);
+          const res = c2.value - net;
+          return `<div class="kpi"><span class="lbl">${esc(name)}</span><span class="v">${fmt.czk(c2.value)}</span>
+            <span class="s">vloženo ${fmt.czk(vin)}${vout ? ` · vybráno ${fmt.czk(vout)}` : ''}</span>
+            <span class="s">výsledek <b class="${res >= 0 ? 'inc' : 'exp'}">${res > 0 ? '+' : ''}${fmt.czk(res)}</b>${active ? '' : ' · plán ukončen'}</span>
+            <span class="s">${ks.map(([, x]) => x.acc).join(' + ')} · ${c2.pos.map(p => esc(p.ticker)).join(', ') || '—'}</span></div>`;
+        };
+        return `<section class="panel"><div class="phead"><h2>Investiční plány</h2><span class="muted">pojmenujte plány – stejné jméno sloučí plán v USD i EUR</span></div>
+          <div class="kpis" style="margin-bottom:14px">${people.map(card).join('')}</div>
+          <div class="tablebox"><table><thead><tr><th>Plán</th><th>Komu patří</th><th class="amt">Vloženo</th><th class="amt">Vybráno</th><th class="amt">Otevřené pozice</th><th>Období</th></tr></thead><tbody>
+          ${E.sort((a, b) => (b[1].lots.length > 0) - (a[1].lots.length > 0) || a[0].localeCompare(b[0])).map(([k, x]) => `<tr${x.lots.length ? '' : ' style="opacity:.6"'}><td><b>${x.acc}</b> · ${esc(x.sub)}<div class="x">${x.lots.length ? 'aktivní' : 'ukončený'}</div></td>
+            <td><input type="text" list="invPeople" data-plan="${esc(k)}" value="${esc(x.name || '')}" placeholder="např. Mikuláš" style="width:150px"></td>
+            <td class="amt">${fmt.num(x.vlozeno)} ${x.acc}</td><td class="amt">${fmt.num(x.vybrano)} ${x.acc}</td><td class="amt">${x.lots.length}</td><td class="d">${fmt.date(x.od)} – ${fmt.date(x.do)}</td></tr>`).join('')}
+          </tbody></table></div><datalist id="invPeople"><option value="Mikuláš"><option value="Maruška"><option value="Korbelovi"></datalist>
+          <p class="muted" style="font-size:12px;margin-bottom:0">Výsledek = dnešní hodnota + vybrané peníze − vložené peníze, v dnešním kurzu. Pozice se plánům přiřazují podle výpisu otevřených pozic z XTB. Plán, který jste zrušili a peníze převedli zpět na hlavní účet, je označený jako ukončený.</p></section>`;
+      }
+      function accounts(c) {
+        const A = Object.entries(d.cash || {}); if (!A.length) return '';
+        const r = k => d.fx[k] || 1, cz = (v, k) => fmt.czk(v * r(k));
+        const net = A.reduce((s, [k, x]) => s + (x.vklady - x.vybery) * r(k), 0), cash = A.reduce((s, [k, x]) => s + (x.zustatek || 0) * r(k), 0);
+        const total = c.value + cash, res = total - net;
+        const n2 = (v, k) => `${fmt.num(v)} ${k}`;
+        return `<section class="panel"><div class="phead"><h2>Účty XTB</h2><span class="muted">stav podle posledního importu</span></div>
+          <div class="kpis" style="margin-bottom:14px">
+            <div class="kpi"><span class="lbl">Čistý vklad z banky</span><span class="v">${fmt.czk(net)}</span><span class="s">vklady − výběry</span></div>
+            <div class="kpi"><span class="lbl">Hotovost na účtech</span><span class="v">${fmt.czk(cash)}</span><span class="s">přepočet dnešním kurzem</span></div>
+            <div class="kpi"><span class="lbl">Celkem v XTB</span><span class="v">${fmt.czk(total)}</span><span class="s">portfolio + hotovost</span></div>
+            <div class="kpi"><span class="lbl">Celkový výsledek</span><span class="v ${res >= 0 ? 'inc' : 'exp'}">${res > 0 ? '+' : ''}${fmt.czk(res)}</span><span class="s">${net > 0 ? fmt.pct(res / net * 100) + ' z čistého vkladu' : ''}</span></div></div>
+          <div class="tablebox"><table><thead><tr><th>Účet</th><th class="amt">Vklady</th><th class="amt">Výběry</th><th class="amt">Převody přijaté</th><th class="amt">Převody odeslané</th><th class="amt">Úroky po dani</th><th class="amt">CFD</th><th class="amt">Hotovost</th></tr></thead><tbody>
+          ${A.map(([k, x]) => `<tr><td><b>${k}</b><div class="x">${esc(x.ucet || '')}${x.k ? ' · ' + fmt.date(x.k) : ''}</div></td><td class="amt">${n2(x.vklady, k)}</td><td class="amt">${n2(x.vybery, k)}</td>
+            <td class="amt">${n2(x.prevodyIn, k)}</td><td class="amt">${n2(x.prevodyOut, k)}</td><td class="amt">${n2(x.uroky - x.danUroky, k)}</td>
+            <td class="amt ${x.cfd < 0 ? 'exp' : x.cfd > 0 ? 'inc' : ''}">${x.cfd ? n2(x.cfd, k) : '—'}</td><td class="amt">${x.zustatek != null ? n2(x.zustatek, k) : '—'}<div class="x">${k !== 'CZK' && x.zustatek ? cz(x.zustatek, k) : ''}</div></td></tr>`).join('')}
+          </tbody></table></div>
+          <p class="muted" style="font-size:12px;margin-bottom:0">Převody jsou směny mezi vašimi účty CZK, USD a EUR. Celkový výsledek zahrnuje zisky z prodejů, dividendy, úroky i výsledek CFD. Nahrajte všechny tři účty, ať sedí čistý vklad i hotovost.</p></section>`;
       }
 
       function viewTax(c, tx, y, td) {
@@ -217,8 +426,11 @@
             <div class="taxrow"><span>Orientační základ daně</span><b>${fmt.czk(tx.base)}</b></div>
             <div class="taxrow"><span>Orientační daň (${TAX_RATE * 100} %)</span><b class="${tx.tax ? 'exp' : ''}">${fmt.czk(tx.tax)}</b></div>
             <div class="taxrow"><span>Dividendy (hrubě)</span><b>${fmt.czk(tx.divs)}</b></div>
-            <p class="muted" style="font-size:12px">Orientační výpočet metodou FIFO v kurzech zadaných u transakcí. Nejde o daňové poradenství. Pravidla ověřte u daňového poradce nebo na webu Finanční správy.</p>
-            ${tx.r.length ? `<div class="lbl" style="margin-top:8px">Prodeje ${y}</div>${tx.r.map(x => `<div class="taxrow"><span>${esc(x.ticker)} · ${fmt.num(x.qty, 4)} ks · koupeno ${fmt.date(x.buy)}</span><span><span class="pill ${x.exempt ? 'ok' : 'warn'}">${x.exempt ? 'test splněn' : 'do 3 let'}</span> <b>${fmt.czk(x.proceeds - x.cost - x.fee)}</b></span></div>`).join('')}` : ''}
+            ${tx.wht ? `<div class="taxrow"><span>Daň sražená u zdroje (dividendy)</span><b>${fmt.czk(tx.wht)}</b></div>` : ''}
+            <p class="muted" style="font-size:12px">Orientační výpočet: prodej se páruje s nákupem stejně jako v XTB (u ručních transakcí nejstarší nákup první), v kurzech uložených u transakcí. Nejde o daňové poradenství. Pravidla ověřte u daňového poradce nebo na webu Finanční správy.</p>
+            ${tx.r.length ? `<div class="lbl" style="margin-top:8px">Prodeje ${y} podle titulů</div>${Object.entries(tx.r.reduce((g, x) => ((g[x.ticker] = g[x.ticker] || []).push(x), g), {})).map(([k, L]) => { const z = L.reduce((s, x) => s + x.proceeds - x.cost - x.fee, 0), ex = L.every(x => x.exempt), mix = !ex && L.some(x => x.exempt);
+              return `<details class="taxrow" style="display:block"><summary style="display:flex;justify-content:space-between;gap:10px;cursor:pointer"><span><b style="font-family:var(--f-body)">${esc(k)}</b> · ${L.length} ${L.length === 1 ? 'lot' : L.length < 5 ? 'loty' : 'lotů'} · výnos ${fmt.czk(L.reduce((s, x) => s + x.proceeds, 0))}</span><span><span class="pill ${ex ? 'ok' : 'warn'}">${ex ? 'test splněn' : mix ? 'část do 3 let' : 'do 3 let'}</span> <b class="${z >= 0 ? 'inc' : 'exp'}">${fmt.czk(z)}</b></span></summary>
+              ${L.map(x => `<div class="taxrow" style="padding-left:12px"><span>${fmt.num(x.qty, 4)} ks · koupeno ${fmt.date(x.buy)} · prodáno ${fmt.date(x.sell)}</span><span><span class="pill ${x.exempt ? 'ok' : 'warn'}">${x.exempt ? 'test splněn' : 'do 3 let'}</span> <b>${fmt.czk(x.proceeds - x.cost - x.fee)}</b></span></div>`).join('')}</details>` }).join('')}` : ''}
           </section></div>`;
       }
 
@@ -226,6 +438,9 @@
         const list = [...d.txs].sort((a, b) => b.date.localeCompare(a.date));
         const opt = (v, l, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`;
         return `<div style="display:flex;flex-direction:column;gap:16px;margin-top:16px">
+          <label class="drop" id="xtbDrop"><span><strong>Import z XTB</strong> <small>— přetáhněte sem export historie účtu (XLSX) nebo klikněte. Každý účet (CZK, USD, EUR) exportujte a nahrajte zvlášť. V xStation 5: Historie účtu → období od založení účtu → Export.</small></span>
+            <span class="btn primary">Vybrat soubor</span><input type="file" id="xtbIn" accept=".xlsx,.xls,.csv" hidden></label>
+          <div id="xtbPrev"></div>
           <section class="panel"><div class="phead"><h2>Nová transakce</h2></div>
           <form id="invForm" class="fgrid">
             <label class="field">Datum<input type="date" id="fD" value="${App.today()}" required></label>
@@ -243,7 +458,7 @@
           <section class="panel"><div class="phead"><h2>Historie</h2><span class="muted num">${list.length} transakcí</span></div>
           <div class="tablebox"><table><thead><tr><th>Datum</th><th>Typ</th><th>Titul</th><th class="amt">Kusů</th><th class="amt">Cena</th><th class="amt">Celkem Kč</th><th></th></tr></thead><tbody>
           ${list.slice(0, 150).map(t => `<tr><td class="d">${fmt.date(t.date)}</td><td><span class="pill ${t.type === 'buy' ? 'ok' : t.type === 'sell' ? 'warn' : 'dim'}">${{ buy: 'nákup', sell: 'prodej', div: 'dividenda' }[t.type]}</span></td>
-            <td><b>${esc(t.ticker)}</b></td><td class="amt">${t.type === 'div' ? '—' : fmt.num(t.qty, 4)}</td><td class="amt">${fmt.num(t.price)} ${t.ccy}</td>
+            <td><b>${esc(t.ticker)}</b>${t.xtb ? ' <span class="pill dim">XTB</span>' : ''}</td><td class="amt">${t.type === 'div' ? '—' : fmt.num(t.qty, 4)}</td><td class="amt">${fmt.num(t.price)} ${t.ccy}</td>
             <td class="amt">${fmt.czk((t.type === 'div' ? 1 : t.qty) * t.price * (t.fx || 1))}</td><td><button class="btn sm danger" data-del="${t.id}">Smazat</button></td></tr>`).join('')}
           </tbody></table></div></section></div>`;
       }
@@ -257,11 +472,25 @@
       }
 
       function wire(c) {
+        root.querySelectorAll('[data-own]').forEach(b => b.onclick = () => { owner = b.dataset.own; draw() });
+        root.querySelectorAll('[data-plan]').forEach(i => i.onchange = () => { d.plans[i.dataset.plan].name = i.value.trim(); save(); setTimeout(draw); ctx.toast('Plán pojmenován.') });
         root.querySelectorAll('[data-px]').forEach(i => i.onchange = () => { const v = parseFloat(i.value); if (v > 0) { d.prices[i.dataset.px] = { price: v, date: App.today() }; save(); draw(); ctx.toast(`Cena ${i.dataset.px} aktualizována.`) } });
         root.querySelectorAll('[data-fx]').forEach(i => i.onchange = () => { const v = parseFloat(i.value); if (v > 0) { d.fx[i.dataset.fx] = v; save(); ctx.toast('Kurz uložen.') } });
         const nf = $('#fxNew'); if (nf) nf.onchange = () => { const k = nf.value.trim().toUpperCase(); if (/^[A-Z]{3}$/.test(k) && !d.fx[k]) { d.fx[k] = 1; save(); draw() } };
         const w = $('#invWipe'); if (w) armed(w, () => { d = { sample: false, txs: [], fx: d.fx, prices: {} }; save(); draw(); ctx.toast('Data investic smazána.') });
         root.querySelectorAll('[data-del]').forEach(b => armed(b, () => { d.txs = d.txs.filter(t => t.id !== b.dataset.del); save(); draw() }));
+        const xd = $('#xtbDrop');
+        if (xd) {
+          const go = async file => {
+            if (!file) return;
+            try { pending = await readXTB(file); pending.file = file.name; pending.accFound = !!pending.acc; showPrev() } catch (e) { ctx.toast(e.message) }
+          };
+          $('#xtbIn').onchange = e => go(e.target.files[0]);
+          ['dragenter', 'dragover'].forEach(ev => xd.addEventListener(ev, e => { e.preventDefault(); xd.classList.add('over') }));
+          ['dragleave', 'drop'].forEach(ev => xd.addEventListener(ev, e => { e.preventDefault(); xd.classList.remove('over') }));
+          xd.addEventListener('drop', e => go(e.dataTransfer.files[0]));
+          if (pending) showPrev();
+        }
         const f = $('#invForm'); if (!f) return;
         const sync = () => { const ty = $('#fT').value; $('#fQw').hidden = ty === 'div'; $('#fPl').textContent = ty === 'div' ? 'Částka celkem (hrubě)' : 'Cena za kus' };
         $('#fT').onchange = sync; sync();
@@ -275,6 +504,55 @@
           if (d.sample) d = { sample: false, txs: [], fx: d.fx, prices: {} };
           d.txs.push(t); save(); draw(); ctx.toast('Transakce přidána.');
         };
+      }
+      function showPrev() {
+        const P = pending; P.acc = P.acc || 'CZK';
+        const conv = mergeConv(d.conv, P.conv);
+        const all = toCZK(P, P.acc, d.fx, conv), have = new Set(d.sample ? [] : d.txs.filter(t => t.xtb).map(t => t.xtb));
+        const fresh = all.filter(t => !have.has(t.xtb)), dup = all.length - fresh.length;
+        const yrs = [...new Set(fresh.map(t => t.date.slice(0, 4)))].filter(y => P.acc !== 'CZK' && !(JK[y] || {})[P.acc]);
+        // kontrola: kusy z importu tohoto účtu vs. otevřené pozice ve výpisu
+        const net = {}; [...(d.sample ? [] : d.txs.filter(t => t.acc === P.acc)), ...fresh].forEach(t => { if (t.type === 'buy') net[t.ticker] = (net[t.ticker] || 0) + t.qty; if (t.type === 'sell') net[t.ticker] = (net[t.ticker] || 0) - t.qty });
+        const bad = [...new Set([...Object.keys(net), ...Object.keys(P.open)])].filter(k => Math.abs((net[k] || 0) - (P.open[k] || 0)) > 1e-3);
+        const n = k => fresh.filter(t => t.type === k).length;
+        const manual = d.sample ? [] : d.txs.filter(t => !t.xtb && fresh.some(x => x.ticker === t.ticker));
+        const sk = Object.entries(P.skipped).map(([k, v]) => `${k} ${v}×`).join(', ');
+        const span = fresh.length ? `${fmt.date(fresh.reduce((a, t) => t.date < a ? t.date : a, fresh[0].date))} – ${fmt.date(fresh.reduce((a, t) => t.date > a ? t.date : a, fresh[0].date))}` : '';
+        $('#xtbPrev').innerHTML = `<section class="panel imp"><div class="phead"><h2>Náhled importu</h2><span class="muted">${esc(P.file)} · list ${esc(P.sheet)}</span></div>
+          <div class="kpis" style="margin-bottom:12px">
+            <div class="kpi"><span class="lbl">Nákupy</span><span class="v">${n('buy')}</span></div>
+            <div class="kpi"><span class="lbl">Prodeje</span><span class="v">${n('sell')}</span></div>
+            <div class="kpi"><span class="lbl">Dividendy</span><span class="v">${n('div')}</span><span class="s">${P.wht ? 'sražená daň ' + fmt.czk(P.wht) : ''}</span></div>
+            <div class="kpi"><span class="lbl">Aktuální ceny</span><span class="v">${Object.keys(P.prices).length}</span><span class="s">z otevřených pozic</span></div></div>
+          <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px"><label class="field" style="width:140px">Účet v měně<select id="xtbAcc">${['CZK', 'USD', 'EUR'].map(c => `<option${c === P.acc ? ' selected' : ''}>${c}</option>`).join('')}</select></label>
+            <p class="muted" style="margin:0 0 4px;font-size:13px;flex:1;min-width:220px">${P.accFound ? 'Zjištěno z výpisu.' : '<span style="color:var(--warn)">Měnu jsem ve výpisu nenašel, zkontrolujte ji.</span>'} ${P.acc === 'CZK' ? 'Kurz se počítá z částky v Kč, včetně poplatku za směnu.' : `Částky v ${P.acc} se přepočtou na Kč jednotným kurzem GFŘ za daný rok${yrs.length ? ` (pro rok ${yrs.join(', ')} průměrem vašich směn v XTB: ${czkRate(P.acc, yrs[0] + '-01-01', d.fx, conv)} Kč)` : ''}.`}</p></div>
+          <p class="muted" style="margin:0 0 6px">${span ? 'Období ' + span + '. ' : ''}${dup ? `Už importováno dříve: ${dup} (přeskočím). ` : ''}${sk ? `Nepotřebné operace: ${sk}. ` : ''}${P.unknown.length ? `<span style="color:var(--warn)">Nerozpoznáno ${P.unknown.length} řádků, např. „${esc(P.unknown[0])}“.</span>` : ''}</p>
+          ${P.plans?.length ? `<p class="muted" style="margin:0 0 6px">Investiční plány: ${P.plans.length} (${P.plans.filter(x => x.lots.length).length} s otevřenými pozicemi). Pojmenujete je po importu v záložce Pozice.</p>` : ''}
+          <p style="margin:0 0 6px;color:var(--${bad.length ? 'warn' : 'inc'})">${bad.length ? `Kontrola kusů nesedí u: ${bad.map(k => `${esc(k)} (import ${fmt.num(net[k] || 0, 4)}, výpis ${fmt.num(P.open[k] || 0, 4)})`).join(', ')}.` : `Kontrola: držené kusy sedí s otevřenými pozicemi ve výpisu (${Object.keys(P.open).length} titulů).`}</p>
+          ${d.sample ? '<p class="muted" style="margin:0 0 6px">Ukázková data se nahradí vašimi.</p>' : ''}
+          ${manual.length ? `<p style="margin:0 0 6px;color:var(--warn)">Pro stejné tituly máte ${manual.length} ručně zadaných transakcí. Pokud jde o tytéž obchody, započítaly by se dvakrát.</p>` : ''}
+          <div class="acts">${true ? `<button class="btn primary" id="xtbGo">Importovat ${fresh.length} transakcí</button>` : '<span class="muted">Nic nového k importu.</span>'}
+          ${manual.length ? `<button class="btn" id="xtbGoRepl">Importovat a smazat ruční u těchto titulů</button>` : ''}<button class="btn" id="xtbNo">Zrušit</button></div></section>`;
+        const run = repl => {
+          if (d.sample) d = { sample: false, txs: [], fx: d.fx, prices: {} };
+          d.conv = conv; d.cash = d.cash || {}; d.cash[P.acc] = { ...P.cash, ucet: P.account, k: App.today() };
+          // investiční plány tohoto účtu: přepsat stav, ponechat jména
+          const old = d.plans || {}; d.plans = Object.fromEntries(Object.entries(old).filter(([k]) => !k.startsWith(P.acc + ':')));
+          (P.plans || []).forEach(x => { const k = P.acc + ':' + x.sub; d.plans[k] = { ...x, acc: P.acc, lots: x.lots.map(l => P.acc + ':' + l), name: old[k]?.name || '' } });
+          d.planPos = {}; Object.entries(d.plans).forEach(([k, x]) => x.lots.forEach(l => d.planPos[l] = k));
+          const lc = {}; conv.forEach(x => { if (!lc[x.ccy] || x.date > lc[x.ccy].date) lc[x.ccy] = x }); for (const [c, x] of Object.entries(lc)) d.fx[c] = x.rate;   // aktuální kurz = poslední směna
+          if (repl) { const tk = new Set(fresh.map(t => t.ticker)); d.txs = d.txs.filter(t => t.xtb || !tk.has(t.ticker)) }
+          fresh.forEach(t => d.txs.push({ id: uid(), ...t }));
+          // kurz měny = poslední kurz z importu, pokud ho nemáte zadaný
+          const lastFx = {}; fresh.filter(t => t.type !== 'div' && t.acc === 'CZK').sort((a, b) => a.date.localeCompare(b.date)).forEach(t => lastFx[t.ccy] = t.fx);
+          for (const [c, v] of Object.entries(lastFx)) if (!d.fx[c] || d.fx[c] === FX0[c] || d.fx[c] === 1) d.fx[c] = v;
+          for (const [k, v] of Object.entries(P.prices)) d.prices[k] = { price: v, date: App.today() };
+          pending = null; save(); draw(); ctx.toast(`Importováno ${fresh.length} transakcí z XTB.`);
+        };
+        const g = $('#xtbGo'); if (g && !fresh.length) g.textContent = 'Uložit ceny a stav účtu'; if (g) g.onclick = () => run(false);
+        const gr = $('#xtbGoRepl'); if (gr) gr.onclick = () => run(true);
+        $('#xtbNo').onclick = () => { pending = null; $('#xtbPrev').innerHTML = '' };
+        $('#xtbAcc').onchange = e => { P.acc = e.target.value; showPrev() };
       }
       function armed(btn, fn) { btn.onclick = () => { if (btn.classList.contains('armed')) fn(); else { const o = btn.textContent; btn.classList.add('armed'); btn.textContent = 'Opravdu?'; setTimeout(() => { btn.classList.remove('armed'); btn.textContent = o }, 4000) } } }
 
