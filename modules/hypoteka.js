@@ -39,32 +39,46 @@
   const annuity = (L, rPct, n) => { const r = rPct / 1200; return n <= 0 ? L : r ? L * r / (1 - Math.pow(1 + r, -n)) : L / n };
   const round2 = v => Math.round(v * 100) / 100;
 
-  /** Splátkový kalendář. Respektuje změny sazby (po fixaci) a mimořádné splátky. */
+  /** Splátkový kalendář jako v bance: úrok se počítá denně (ACT/360) za kalendářní měsíc, zaúčtuje se
+      poslední den měsíce a zaplatí se v nejbližší anuitní splátce (ta = úrok + zbytek na jistinu).
+      Před první anuitní splátkou (období čerpání) se úrok platí hned na konci měsíce.
+      Respektuje skutečné úroky z výpisů (L.uroky), změny sazby a mimořádné splátky. */
   function schedule(L, opt = {}) {
-    const out = [], n0 = Math.round((+L.roky || 0) * 12); if (!(+L.castka > 0 && n0 > 0 && L.cerpani)) return out;
+    const out = []; if (!(+L.castka > 0 && L.cerpani && (+L.roky > 0 || L.konec))) return out;
     const day = +L.den || dt(L.cerpani).getUTCDate();
+    const first = L.prvniSplatka && L.prvniSplatka > L.cerpani ? L.prvniSplatka : addM(L.cerpani, 1, day);
+    const mdiff = (a, b) => (+b.slice(0, 4) - +a.slice(0, 4)) * 12 + (+b.slice(5, 7) - +a.slice(5, 7));
+    const n0 = L.konec && L.konec > first ? mdiff(first, L.konec) + 1 : Math.round((+L.roky || 0) * 12);
     const rates = [...(L.sazby || [])].filter(x => x.od && +x.sazba >= 0).sort((a, b) => a.od.localeCompare(b.od));
     const extras = [...(L.mimoradne || []), ...(opt.extra || [])].filter(x => x.date && +x.castka > 0).sort((a, b) => a.date.localeCompare(b.date));
-    let bal = +L.castka, rate = +L.sazba, nLeft = n0, pay = +L.splatkaBanka > 0 ? +L.splatkaBanka : annuity(bal, rate, nLeft);
-    let prev = L.cerpani, k = 0, ei = 0;
+    const U = L.uroky || {};
     const rateAt = d => { let r = +L.sazba; for (const x of rates) if (x.od <= d) r = +x.sazba; if (opt.rateAfterFix != null && L.fixaceDo && d > L.fixaceDo) r = opt.rateAfterFix; return r };
-    while (bal > 0.005 && k < 720) {
-      k++; const date = addM(L.cerpani, k, day);
-      // mimořádné splátky v období
-      while (ei < extras.length && extras[ei].date <= date) {
-        const x = extras[ei++], amt = Math.min(bal, +x.castka); bal -= amt;
-        out.push({ date: x.date, extra: amt, interest: 0, principal: amt, pay: amt, bal: round2(bal), rate });
-        if (x.rezim === 'splatka') pay = annuity(bal, rate, nLeft);
+    const k = +L.splatkaBanka > 0 ? +L.splatkaBanka / annuity(+L.castka, +L.sazba, n0) : 1;   // kalibrace na výpočet banky
+    let P = +L.castka, rate = +L.sazba, nLeft = n0, pay = +L.splatkaBanka > 0 ? +L.splatkaBanka : annuity(P, rate, nLeft);
+    let due = 0, dueAct = false, cur = L.cerpani, ms = L.cerpani.slice(0, 8) + '01', ei = 0;
+    for (let it = 0; it < 900 && (P > 0.005 || due > 0.005); it++) {
+      const me = iso(new Date(Date.UTC(+ms.slice(0, 4), +ms.slice(5, 7), 0))), payD = addM(ms, 0, day), ym = ms.slice(0, 7);
+      let acc = 0; const r0 = rateAt(ms);
+      if (payD >= first && payD > cur && payD <= me && nLeft > 0) {
+        acc += P * r0 / 36000 * days(cur, payD);
+        while (ei < extras.length && extras[ei].date <= payD) {   // mimořádná splátka (zjednodušeně ke dni splátky)
+          const x = extras[ei++], amt = Math.min(P, +x.castka); P -= amt;
+          out.push({ date: x.date, extra: amt, interest: 0, principal: amt, pay: amt, bal: round2(P), rate });
+          if (x.rezim === 'splatka') pay = annuity(P, rate, nLeft) * k;
+        }
+        const r = rateAt(payD); if (r !== rate) { rate = r; pay = annuity(P, rate, nLeft) * k }   // nová fixace → nová splátka
+        let interest = round2(due); let principal = nLeft <= 1 ? P : Math.min(P, Math.max(0, pay - interest));
+        if (P - principal <= 0.005) { interest = round2(interest + acc); acc = 0 }   // poslední splátka: doplatí i úrok za poslední dny
+        P -= principal; nLeft--;
+        out.push({ date: payD, interest, principal: round2(principal), pay: round2(interest + principal), bal: round2(Math.max(0, P)), rate, actual: dueAct });
+        due = 0; dueAct = false; cur = payD;
       }
-      if (bal <= 0.005) break;
-      const r = rateAt(date);
-      if (r !== rate) { rate = r; pay = annuity(bal, rate, nLeft) }   // nová sazba → přepočet splátky na zbývající dobu
-      const interest = bal * rate / 1200;
-      let principal = Math.min(bal, pay - interest); if (principal < 0) principal = 0;
-      bal -= principal; nLeft--;
-      out.push({ date, interest: round2(interest), principal: round2(principal), pay: round2(interest + principal), bal: round2(Math.max(0, bal)), rate });
-      prev = date;
-      if (nLeft <= 0 && bal > 0.005) { nLeft = 1; pay = bal * (1 + rate / 1200) }
+      acc += P * r0 / 36000 * (days(cur, me) + 1);
+      const posted = U[ym] != null ? +U[ym] : round2(acc);
+      if (me < first) out.push({ date: me, interest: posted, principal: 0, pay: posted, bal: round2(P), rate: r0, io: true, actual: U[ym] != null });
+      else { due += posted; dueAct = U[ym] != null }
+      cur = addM(ms, 1, 1); ms = cur;
+      if (P <= 0.005 && nLeft <= 0 && due > 0.005) { out.push({ date: addM(ms, 0, day), interest: round2(due), principal: 0, pay: round2(due), bal: 0, rate }); due = 0 }
     }
     return out;
   }
@@ -78,7 +92,7 @@
     const byYear = {};
     for (const x of S) { const k = x.date.slice(0, 4), Y = byYear[k] || (byYear[k] = { rok: k, urok: 0, umor: 0, mimo: 0, zustatek: 0 }); Y.urok += x.interest; if (x.extra) Y.mimo += x.extra; else Y.umor += x.principal; Y.zustatek = x.bal }
     return {
-      S, bal, nextPay, pay: (nextPay || reg[reg.length - 1] || {}).pay || 0, last: S[S.length - 1]?.date,
+      S, bal, nextPay, pay: (fut.find(x => !x.extra && !x.io) || reg[reg.length - 1] || {}).pay || 0, curPay: (nextPay || {}).pay || 0, ioUntil: nextPay?.io ? S.find(x => !x.io && !x.extra)?.date : null, last: S[S.length - 1]?.date,
       paidPrincipal: (+L.castka || 0) - bal, interestPaid: sumI(past), interestYear: sumI(S.filter(x => x.date.startsWith(y))), interestTotal: sumI(S),
       years: Object.values(byYear), fixDays: L.fixaceDo ? days(td, L.fixaceDo) : null,
       balAtFix: L.fixaceDo ? (S.filter(x => x.date <= L.fixaceDo).pop()?.bal ?? +L.castka) : null
@@ -100,15 +114,17 @@
   }
 
   /* ---------- úložiště ---------- */
-  const NEW = () => ({ id: 'u' + Date.now().toString(36), nazev: 'Hypotéka na pozemek', banka: '', ucel: 'pozemek', castka: 0, cerpani: '', smlouva: '', sazba: 0, roky: 30, den: 0, fixaceDo: '', splatkaBanka: 0, pojisteni: 0, sazby: [], mimoradne: [] });
+  const NEW = () => ({ id: 'u' + Date.now().toString(36), nazev: 'Hypotéka na pozemek', banka: '', ucel: 'pozemek', castka: 0, cerpani: '', smlouva: '', sazba: 0, roky: 30, den: 0, fixaceDo: '', prvniSplatka: '', konec: '', splatkaBanka: 0, pojisteni: 0, sazby: [], mimoradne: [], uroky: {} });
   const loadLoans = store => { const a = store.get('loans', null); return Array.isArray(a) && a.length ? a : [NEW()] };
   const ready = L => +L.castka > 0 && +L.sazba >= 0 && +L.roky > 0 && !!L.cerpani;
+
+  App.loanSchedule = schedule;   // pro kontrolu a další moduly
 
   /* splátky pro Pravidelné platby v Rozpočtu */
   App.loanPayments = () => {
     const td = App.today(), st = App.store('hypoteka');
     return loadLoans(st).filter(ready).map(L => { const s = stats(L); return { L, s } }).filter(({ L, s }) => L.cerpani <= td && s.last >= td.slice(0, 7))
-      .map(({ L, s }) => ({ id: 'hyp-' + L.id, nazev: 'Splátka – ' + (L.nazev || 'úvěr'), castka: Math.round(s.pay + (+L.pojisteni || 0)), den: +L.den || +L.cerpani.slice(8), freq: 'm', zpusob: 'trvaly', klic: '', pozn: L.banka || '' }));
+      .map(({ L, s }) => ({ id: 'hyp-' + L.id, nazev: 'Splátka – ' + (L.nazev || 'úvěr'), castka: Math.round((s.curPay || s.pay) + (+L.pojisteni || 0)), den: s.ioUntil ? 31 : (+L.den || +L.cerpani.slice(8)), freq: 'm', zpusob: 'trvaly', klic: '', pozn: L.banka || '' }));
   };
 
   App.register({
@@ -169,7 +185,7 @@
         return `
           <div class="kpis">
             <div class="kpi"><span class="lbl">Zbývá splatit</span><span class="v" data-count="${Math.round(s.bal)}"></span><span class="s">z ${fmt.czk(l.castka)} · splaceno ${fmt.pct(s.paidPrincipal / l.castka * 100)}</span></div>
-            <div class="kpi"><span class="lbl">Měsíční splátka</span><span class="v">${fmt.czk(s.pay)}</span><span class="s">${+l.pojisteni ? `+ pojištění ${fmt.czk(l.pojisteni)} · ` : ''}sazba ${fmt.num(l.sazba, 2)} %${s.nextPay ? ` · další ${fmt.date(s.nextPay.date)}` : ''}</span></div>
+            <div class="kpi"><span class="lbl">Měsíční splátka</span><span class="v">${fmt.czk(s.pay)}</span><span class="s">${s.ioUntil ? `teď jen úroky ~${fmt.czk(s.curPay)} · anuita od ${fmt.date(s.ioUntil)} · ` : ''}${+l.pojisteni ? `+ pojištění ${fmt.czk(l.pojisteni)} · ` : ''}sazba ${fmt.num(l.sazba, 2)} %${s.nextPay ? ` · další ${fmt.date(s.nextPay.date)}` : ''}</span></div>
             <div class="kpi"><span class="lbl">Konec fixace</span><span class="v ${s.fixDays != null && s.fixDays < 180 ? 'exp' : ''}">${s.fixDays == null ? '—' : s.fixDays >= 0 ? s.fixDays + ' dní' : 'skončila'}</span><span class="s">${l.fixaceDo ? fmt.date(l.fixaceDo) + ` · zůstatek ${fmt.czk(s.balAtFix)}` : 'doplňte v nastavení'}</span></div>
             <div class="kpi"><span class="lbl">Úroky ${y}</span><span class="v">${fmt.czk(s.interestYear)}</span><span class="s">zaplaceno celkem ${fmt.czk(s.interestPaid)} · za celou dobu ${fmt.czk(s.interestTotal)}</span></div>
           </div>
@@ -177,7 +193,7 @@
             <section class="panel hy-chart"><div class="phead"><h2>Průběh splácení</h2><span class="muted">poslední splátka ${fmt.date(s.last)}</span></div>${chart(l, s, fixS)}
               <div class="hy-legend"><span><i style="border-color:var(--accent)"></i>zůstatek jistiny</span><span><i style="border-color:var(--warn);border-top-style:dashed"></i>dnes</span>${l.fixaceDo ? '<span><i style="border-color:var(--exp);border-top-style:dotted"></i>konec fixace</span>' : ''}${fixS ? `<span><i style="border-color:var(--muted);border-top-style:dashed"></i>sazba ${fmt.num(simRate, 2)} % po fixaci</span>` : ''}</div></section>
             <section class="panel"><div class="phead"><h2>Odpočet úroků z daní</h2><span class="pill ${st && limitDate && st.date > limitDate ? 'bad' : 'ok'}">${y}</span></div>
-              <div class="taxrow"><span>Úroky zaplacené v roce ${y}</span><b>${fmt.czk(s.interestYear)}</b></div>
+              <div class="taxrow"><span>Úroky zaplacené v roce ${y}${(() => { const A = s.S.filter(x => x.date.startsWith(y) && !x.extra && x.interest > 0), n = A.filter(x => x.actual).length; return `<br><span class="muted" style="font-size:12px">${n ? `${n} z ${A.length} měsíců podle výpisů, zbytek odhad` : 'odhad – doplňte úroky z výpisů'}</span>` })()}</span><b>${fmt.czk(s.interestYear)}</b></div>
               <div class="taxrow"><span>Roční limit odpočtu</span><b>${fmt.czk(lim)}</b></div>
               <div class="taxrow"><span>Odečtete ze základu daně</span><b>${fmt.czk(ded)}</b></div>
               <div class="taxrow"><span>Ušetříte na dani (15 %)</span><b class="hy-ok">${fmt.czk(ded * 0.15)}</b></div>
@@ -231,13 +247,16 @@
             ${f('nazev', 'Název')}${f('banka', 'Banka')}
             <label class="field">Účel<select data-k="ucel"><option value="pozemek"${l.ucel === 'pozemek' ? ' selected' : ''}>koupě pozemku</option><option value="stavba"${l.ucel === 'stavba' ? ' selected' : ''}>stavba domu</option><option value="byt"${l.ucel === 'byt' ? ' selected' : ''}>byt / dům</option><option value="jine"${l.ucel === 'jine' ? ' selected' : ''}>jiné</option></select></label>
             ${f('castka', 'Výše úvěru (Kč)', 'number', 'step="10000" min="0"')}${f('cerpani', 'Datum čerpání', 'date')}${f('smlouva', 'Datum podpisu smlouvy', 'date')}
-            ${f('sazba', 'Úroková sazba (% p. a.)', 'number', 'step="0.01" min="0"')}${f('roky', 'Splatnost (roky)', 'number', 'step="1" min="1" max="40"')}${f('fixaceDo', 'Konec fixace', 'date')}
+            ${f('sazba', 'Úroková sazba (% p. a.)', 'number', 'step="0.01" min="0"')}${f('roky', 'Splatnost (roky)', 'number', 'step="1" min="1" max="40"')}${f('fixaceDo', 'Konec fixace', 'date')}${f('prvniSplatka', 'První anuitní splátka (nepovinné)', 'date')}${f('konec', 'Konečná splatnost (nepovinné)', 'date')}
             ${f('den', 'Den splátky v měsíci', 'number', 'min="1" max="28" placeholder="podle čerpání"')}${f('splatkaBanka', 'Splátka podle banky (nepovinné)', 'number', 'step="1" min="0" placeholder="dopočítá se"')}${f('pojisteni', 'Pojištění měsíčně (Kč)', 'number', 'step="1" min="0"')}
           </div>
           <div class="grid2" style="margin-top:12px">
             <div><div class="lbl" style="margin-bottom:6px">Mimořádné splátky</div>
               ${(l.mimoradne || []).map((x, i) => `<div class="taxrow"><span>${fmt.date(x.date)} · ${fmt.czk(x.castka)} · ${x.rezim === 'splatka' ? 'nižší splátka' : 'kratší doba'}</span><button class="btn sm danger" data-delx="${i}">×</button></div>`).join('') || '<span class="muted">žádné</span>'}
               <div class="acts" style="margin-top:6px"><input type="date" id="hyXd" aria-label="Datum"><input type="number" id="hyXa" step="10000" placeholder="částka" aria-label="Částka" style="width:120px"><select id="hyXm" aria-label="Režim"><option value="doba">zkrátit dobu</option><option value="splatka">snížit splátku</option></select><button class="btn sm" id="hyXadd">Přidat</button></div></div>
+            <div style="grid-column:1/-1"><div class="lbl" style="margin-bottom:6px">Úroky podle výpisů z banky</div>
+              ${Object.entries(l.uroky || {}).sort().map(([m, v]) => `<div class="taxrow"><span>${App.MONTHS[+m.slice(5) - 1]} ${m.slice(0, 4)} · ${fmt.czk2(v)}</span><button class="btn sm danger" data-delu="${m}">×</button></div>`).join('') || '<span class="muted">zatím žádné – počítá se odhadem</span>'}
+              <div class="acts" style="margin-top:6px"><input type="month" id="hyUm" aria-label="Měsíc"><input type="number" id="hyUv" step="0.01" placeholder="úrok Kč" aria-label="Úrok" style="width:120px"><button class="btn sm" id="hyUadd">Přidat</button></div></div>
             <div><div class="lbl" style="margin-bottom:6px">Změny sazby (např. nová fixace)</div>
               ${(l.sazby || []).map((x, i) => `<div class="taxrow"><span>od ${fmt.date(x.od)} · ${fmt.num(x.sazba, 2)} %</span><button class="btn sm danger" data-delr="${i}">×</button></div>`).join('') || '<span class="muted">žádné</span>'}
               <div class="acts" style="margin-top:6px"><input type="date" id="hyRd" aria-label="Od"><input type="number" id="hyRs" step="0.01" placeholder="sazba %" aria-label="Sazba" style="width:100px"><button class="btn sm" id="hyRadd">Přidat</button></div></div>
@@ -259,7 +278,7 @@
           try {
             const j = JSON.parse(await f.text()), src = Array.isArray(j.loans) ? j.loans : [j.loan || j];
             const keys = Object.keys(NEW()).filter(k => k !== 'id');
-            src.forEach((x, i) => { const tgt = i === 0 && !ready(l) ? l : (loans.push(NEW()), loans[loans.length - 1]); keys.forEach(k => { if (x[k] !== undefined && x[k] !== '') tgt[k] = x[k] }); if (i === 0) sel = tgt.id });
+            src.forEach((x, i) => { const tgt = i === 0 && !ready(l) ? l : (loans.push(NEW()), loans[loans.length - 1]); keys.forEach(k => { if (x[k] !== undefined && x[k] !== '') tgt[k] = k === 'uroky' ? { ...(tgt.uroky || {}), ...x[k] } : x[k] }); if (i === 0) sel = tgt.id });
             edit = false; save(); draw(); ctx.toast('Údaje z úvěrové smlouvy načteny. Zkontrolujte je v Nastavení úvěru.');
           } catch (err) { ctx.toast('Soubor se nepodařilo načíst. Je to soubor .json z Centrály?') }
         };
@@ -268,6 +287,8 @@
         $('#hyXadd') && ($('#hyXadd').onclick = () => { const d = $('#hyXd').value, a = +$('#hyXa').value; if (!d || !(a > 0)) { ctx.toast('Zadejte datum a částku.'); return } (l.mimoradne = l.mimoradne || []).push({ date: d, castka: a, rezim: $('#hyXm').value }); save(); draw() });
         $('#hyRadd') && ($('#hyRadd').onclick = () => { const d = $('#hyRd').value, r = parseFloat($('#hyRs').value); if (!d || !(r >= 0)) { ctx.toast('Zadejte datum a sazbu.'); return } (l.sazby = l.sazby || []).push({ od: d, sazba: r }); save(); draw() });
         root.querySelectorAll('[data-delx]').forEach(b => b.onclick = () => { l.mimoradne.splice(+b.dataset.delx, 1); save(); draw() });
+        $('#hyUadd') && ($('#hyUadd').onclick = () => { const m = $('#hyUm').value, v = parseFloat($('#hyUv').value); if (!m || !(v >= 0)) { ctx.toast('Zadejte měsíc a částku úroku.'); return } (l.uroky = l.uroky || {})[m] = v; save(); draw() });
+        root.querySelectorAll('[data-delu]').forEach(b => b.onclick = () => { delete l.uroky[b.dataset.delu]; save(); draw() });
         root.querySelectorAll('[data-delr]').forEach(b => b.onclick = () => { l.sazby.splice(+b.dataset.delr, 1); save(); draw() });
         const sim = $('#hySim'); if (sim) { sim.oninput = () => { $('#hySimV').textContent = fmt.num(+sim.value, 2) + ' %' }; sim.onchange = () => { simRate = +sim.value; const y = scrollY; draw(); scrollTo(0, y) } }
         const ex = $('#hyEx'); if (ex) ex.onchange = () => { exAmt = Math.max(0, +ex.value || 0); const y = scrollY; draw(); scrollTo(0, y) };
