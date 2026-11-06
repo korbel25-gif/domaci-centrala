@@ -31,8 +31,9 @@ Pokud se tatáž data změní na dvou zařízeních zároveň, aplikace je slou�
 index.html            kostra stránky + seznam modulů (<script src="modules/...">)
 core/core.css         vzhled: barvy (:root), písmo, sdílené komponenty
 core/core.js          jádro: navigace, přehled, úložiště, události, záloha
-modules/rozpocet.js   Rodinný rozpočet (výpisy, kategorie příjmů a výdajů)
+modules/rozpocet.js   Rodinný rozpočet (výpisy, kategorie příjmů a výdajů, pravidelné platby)
 modules/dum.js        Rodinný dům Vejprnice (harmonogram, termín č. p., financování z prodeje bytu)
+modules/hypoteka.js   Hypotéka (zůstatek, splátkový kalendář, fixace, odpočet úroků, simulace)
 modules/investice.js  Investice (FIFO, časový test 3 roky, limit 100 000 Kč, dividendy)
 modules/faktury.js    Faktury OSVČ (QR platba, úhrady, limit DPH, párování s výpisy, import z PDF/XLS/CSV/ISDOC)
 modules/domacnost.js  Chytrá domácnost (zatím simulace, připraveno na Home Assistant)
@@ -45,7 +46,9 @@ img/dum/              vizualizace a výkresy ze studie domu (moduly Dům a Chytr
 
 1. Zkopírujte `modules/_sablona.js`, například jako `modules/auto.js`.
 2. Změňte `id`, `name`, `icon` a obsah funkcí `mount` (celá obrazovka modulu) a `widget` (dlaždice na přehledu).
-3. Do `index.html` přidejte řádek `<script src="modules/auto.js"></script>`.
+3. Do `index.html` přidejte řádek `<script src="modules/auto.js?v=1"></script>`.
+
+Po každé úpravě kódu zvyšte v `index.html` číslo za `?v=`, ať prohlížeče načtou nové soubory.
 
 ## Asistent
 
