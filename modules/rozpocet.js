@@ -31,6 +31,8 @@ const MARKUP = `<div class="wrap">
 
   <section class="imp" id="imp" hidden></section>
 
+  <section class="panel" id="accPanel" hidden></section>
+
   <div class="kpis" id="kpis"></div>
 
   <section class="panel" id="rpPanel"></section>
@@ -87,7 +89,7 @@ const MARKUP = `<div class="wrap">
     <div class="acts" style="margin-top:12px"><button class="btn sm danger" id="wipe">Smazat všechna data</button></div>
   </details>
 
-  <footer>Výpisy se zpracují přímo ve vašem prohlížeči a nikam se neodesílají. Uložené zůstávají jen v tomto prohlížeči na tomto zařízení.</footer>
+  <footer>Výpisy se zpracují přímo ve vašem prohlížeči a nikam se neodesílají. Uložené jsou ve vašich datech Centrály (a při zapnuté synchronizaci na vašem Google Disku).</footer>
 </div>
 <div class="toast" id="toast" hidden></div>
 `;
@@ -120,11 +122,13 @@ function rpStatus(it, ym, tx, used) {
   const date = rpDueDate(it, ym), td = App.today(), amt = +it.castka;
   const man = RP.get('rucne', {})[it.id + '|' + ym];
   if (man) return { due: true, date, state: 'ok', paid: { date: man, how: 'ručně' } };
-  const kw = rpNorm(it.klic || '').split(',').map(x => x.trim()).filter(Boolean);
-  const txt = t => rpNorm(t.party + ' ' + t.desc + ' ' + (t.note || '') + ' ' + (t.acc || '') + ' ' + (t.vs || ''));
+  const sq = x => rpNorm(x).replace(/[^a-z0-9/]+/g, ' ').trim();
+  const kw = String(it.klic || '').split(',').map(sq).filter(Boolean);
+  const txt = t => ' ' + sq([t.party, t.desc, t.note, t.acct, t.vs].join(' ')) + ' ';
+  const amts = [amt, ...(it.alt || [])].filter(x => x > 0);
   const hit = tx.find(t => {
     if (t.amount >= 0 || used.has(t.id) || Math.abs(rpDays(date, t.date)) > 12) return false;
-    const d = Math.abs(-t.amount - amt), kwHit = kw.length && kw.some(k => txt(t).includes(k));
+    const d = Math.min(...amts.map(x => Math.abs(-t.amount - x))), kwHit = kw.length && kw.some(k => txt(t).includes(k));
     return (d <= Math.max(1, amt * 0.02) && (!kw.length || kwHit)) || (kwHit && d <= amt * 0.1);
   });
   if (hit) { used.add(hit.id); return { due: true, date, state: 'ok', paid: { date: hit.date, how: 'výpis', amount: -hit.amount } } }
@@ -134,21 +138,55 @@ function rpMonth(ym) {
   const tx = rpReadTx(), used = new Set();
   return rpItems().map(it => ({ it, ...rpStatus(it, ym, tx, used) })).filter(x => x.due).sort((a, b) => a.date.localeCompare(b.date));
 }
-/** Návrhy z výpisů: stejná protistrana a podobná částka aspoň ve 3 různých měsících. */
+/* Známé pravidelné platby – podle příjemce, zprávy nebo čísla účtu. den = obvyklá splatnost. */
+const RP_KNOWN = [
+  { re: /\b(vzp|zpmv|ozp|cpzp|vozp|rbp|zdravotni poj|zdrav\.? ?poj|pojistovna ministerstva|oborova zdravotni|vojenska zdravotni|revirni bratrska)/, nazev: 'Zdravotní pojištění', den: 8, typ: 'pojistne' },
+  { re: /\b(cssz|ossz|pssz|socialni (poj|zabezp)|duchodove poj|ceska sprava socialniho)/, nazev: 'Sociální pojištění', den: 20, typ: 'pojistne' },
+  { re: /\b(najem|najemne|pronajem bytu|platba najmu|svj|spolecenstvi vlastniku|fond oprav|bytove druzstvo)/, nazev: 'Nájem / bydlení', den: 0, typ: 'bydleni' },
+  { re: /\b(netflix|spotify|youtube|google one|google play|google \*|apple\.com|itunes|icloud|disney|hbo|max\.com|voyo|oneplay|skylink|prime video|amazon prime|audible|storytel|microsoft|xbox|playstation|adobe|canva|openai|chatgpt|anthropic|claude\.ai|dropbox|notion)/, nazev: '', den: 0, typ: 'predplatne' },
+  { re: /\b(o2 czech|o2 cz|t-mobile|tmobile|vodafone|nordic telecom|upc|vodafone cz|poda|starnet)/, nazev: '', den: 0, typ: 'telefon' },
+  { re: /\b(cez|e\.on|eon|innogy|pre |ppas|bohemia energy|centropol|mnd|vodarn|vodovod|teplarn)/, nazev: '', den: 0, typ: 'energie' },
+  { re: /\b(pojist|kooperativa|allianz|generali|uniqa|direct|cpp|csob poj|pillow|slavia poj)/, nazev: '', den: 0, typ: 'pojisteni' },
+  { re: /\b(skolka|ms |materska skola|druzina|krouzek|skolne|obedy|strava\.cz)/, nazev: '', den: 0, typ: 'deti' }
+];
+const RP_TYP = { pojistne: 'pojistné OSVČ', bydleni: 'bydlení', predplatne: 'předplatné', telefon: 'telefon a internet', energie: 'energie', pojisteni: 'pojištění', deti: 'děti' };
+const rpTitle = s => String(s || '').trim().replace(/\s+/g, ' ').replace(/^(platba|trvaly prikaz|inkaso|nakup|karta)\s*[:-]?\s*/i, '').slice(0, 40);
+/** Návrhy z výpisů: opakující se odchozí platby (stejný příjemce / účet a podobná částka) + známé typy plateb. */
 function rpSuggest() {
-  const tx = rpReadTx().filter(t => t.amount < 0), groups = {};
-  for (const t of tx) { const k = rpNorm(t.party || t.desc).replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 40); if (!k) continue; (groups[k] = groups[k] || []).push(t) }
-  const have = rpItems().map(x => rpNorm(x.nazev + ' ' + (x.klic || '')));
-  const out = [];
-  for (const [k, L] of Object.entries(groups)) {
-    const months = new Set(L.map(t => rpYm(t.date))); if (months.size < 3) continue;
-    const amts = L.map(t => -t.amount).sort((a, b) => a - b), med = amts[Math.floor(amts.length / 2)];
-    const similar = L.filter(t => Math.abs(-t.amount - med) <= med * 0.05); if (new Set(similar.map(t => rpYm(t.date))).size < 3) continue;
-    const day = Math.round(similar.reduce((s, t) => s + +t.date.slice(8), 0) / similar.length);
-    if (have.some(h => h.includes(k.split(' ')[0]))) continue;
-    out.push({ nazev: L[0].party || L[0].desc, castka: Math.round(med), den: day, klic: k.split(' ').slice(0, 2).join(' '), pocet: new Set(similar.map(t => rpYm(t.date))).size });
+  const tx = rpReadTx().filter(t => t.amount < 0 && !/^(prevody)$/.test(t.cat || '')), groups = {};
+  const loans = (typeof App.loanPayments === 'function' ? App.loanPayments() : []).map(x => +x.castka);
+  for (const t of tx) {
+    const hay = rpNorm([t.party, t.desc, t.note, t.acct].join(' '));
+    if (/hypot|uver|splatka jistiny|splatka uroku/.test(hay)) continue;
+    const kn = RP_KNOWN.find(k => k.re.test(' ' + hay));
+    const acct = String(t.acct || '').replace(/\s/g, '');
+    const key = acct && acct.length > 5 ? 'a:' + acct : 'p:' + rpNorm(t.party || t.desc).replace(/[^a-z0-9]+/g, ' ').trim().split(' ').slice(0, 3).join(' ');
+    if (key.length < 4) continue;
+    const g = groups[key] || (groups[key] = { key, L: [], kn: null, src: {} }); g.L.push(t); if (kn) g.kn = kn; g.src[t.src] = (g.src[t.src] || 0) + 1;
   }
-  return out.sort((a, b) => b.castka - a.castka).slice(0, 12);
+  const have = rpItems().map(x => rpNorm([x.nazev, x.klic].join(' ')));
+  const out = [];
+  for (const g of Object.values(groups)) {
+    const L = g.L.sort((a, b) => a.date.localeCompare(b.date)), months = [...new Set(L.map(t => rpYm(t.date)))];
+    if (months.length < (g.kn ? 2 : 3)) continue;
+    const last = L.slice(-3).map(t => -t.amount).sort((a, b) => a - b), med = last[Math.floor(last.length / 2)];
+    const similar = L.filter(t => Math.abs(-t.amount - med) <= med * (g.kn && g.kn.typ === 'energie' ? 0.35 : 0.12));
+    const sm = [...new Set(similar.map(t => rpYm(t.date)))];
+    if (sm.length < (g.kn ? 2 : 3)) continue;
+    if (loans.some(l => Math.abs(l - med) <= 2)) continue;
+    // frekvence podle rozestupů měsíců
+    const idx = sm.map(m => +m.slice(0, 4) * 12 + +m.slice(5)), gaps = idx.slice(1).map((v, i) => v - idx[i]), gap = gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)] || 1;
+    const freq = gap >= 11 ? 'y' : gap >= 5 ? 'h' : gap >= 3 ? 'q' : 'm';
+    const day = g.kn && g.kn.den ? g.kn.den : Math.round(similar.slice(-4).reduce((s2, t) => s2 + +t.date.slice(8), 0) / Math.min(4, similar.length));
+    const t0 = similar[similar.length - 1], party = rpTitle(t0.party || t0.desc);
+    const nazev = g.kn && g.kn.nazev ? g.kn.nazev + (party ? ` (${party})` : '') : party || 'Platba ' + (t0.acct || '');
+    const klic = g.key.startsWith('a:') ? g.key.slice(2) : g.key.slice(2).split(' ').slice(0, 2).join(' ');
+    if (have.some(h => h.includes(rpNorm(klic)) || h.includes(rpNorm(party).split(' ')[0] || '§'))) continue;
+    const src = Object.entries(g.src).sort((a, b) => b[1] - a[1])[0][0];
+    out.push({ nazev, castka: Math.round(med), den: Math.min(28, Math.max(1, day)), klic, pocet: sm.length, freq, mesic: freq !== 'm' ? +sm[sm.length - 1].slice(5) : 1, typ: g.kn ? g.kn.typ : '', ucet: src, last: t0.date });
+  }
+  const rank = x => x.typ === 'pojistne' ? 0 : x.typ === 'bydleni' ? 1 : x.typ ? 2 : 3;
+  return out.sort((a, b) => rank(a) - rank(b) || b.castka - a.castka).slice(0, 25);
 }
 App.regularPayments = rpMonth;   // pro asistenta a další moduly
 
@@ -268,7 +306,14 @@ function load(){try{const s=JSON.parse(localStorage.getItem(LS)||'null');if(s&&A
   return true}}catch(e){}return false}
 const catById=id=>state.cats.find(c=>c.id===id)||state.cats.find(c=>c.id===FALLBACK_EXP);
 
+/* Vlastní účty: state.ucty = { 'název': {cislo:'123-456789/0800', banka:'', map:{…}, hint:'…'} } */
+const accNum=s=>{const m=String(s||'').replace(/\s/g,'').match(/(?:(\d{1,6})-)?(\d{2,10})\/(\d{4})/);if(m)return m[2].replace(/^0+/,'')+'/'+m[3];
+  const ib=String(s||'').replace(/\s/g,'').toUpperCase().match(/^CZ\d{2}(\d{4})(\d{6})(\d{10})$/);return ib?ib[3].replace(/^0+/,'')+'/'+ib[1]:''};
+const accBase=s=>{const n=accNum(s);if(n)return n.split('/')[0];const d=String(s||'').replace(/\D/g,'').replace(/^0+/,'');return d.length>=6?d:''};
+const ownNums=()=>Object.values(state.ucty||{}).map(u=>accBase(u.cislo)).filter(Boolean);
+function isOwnTransfer(t){const n=ownNums();if(!n.length)return false;const k=accBase(t.acct);return !!k&&n.includes(k)}
 function autoCat(t){
+  if(isOwnTransfer(t))return 'prevody';
   const hay=' '+tok([t.party,t.desc,t.note,t.acct,t.vs].join(' '))+' ';
   for(const c of state.cats){
     if(c.type==='inc'&&t.amount<=0)continue;
@@ -342,7 +387,7 @@ const FIELDS=[
  ['party','Protistrana / obchodník',[/nazev protiuctu/,/protistran/,/nazev uctu protistrany/,/obchodnik/,/misto/,/prijemce/,/platce/,/counterparty/,/merchant/,/nazev/]],
  ['desc','Zpráva / popis',[/zprava/,/popis/,/ucel/,/detail/,/description/,/informace/,/typ/]],
  ['note','Poznámka',[/poznamka/,/note/,/vlastni/]],
- ['acct','Číslo protiúčtu',[/^protiucet$/,/cislo uctu protistrany/,/ucet protistrany/,/protiucet/,/counter/]],
+ ['acct','Číslo protiúčtu',[/^protiucet$/,/cislo protiuctu/,/cislo uctu protistrany/,/ucet protistrany/,/protiucet/,/protiuct/,/counter/]],
  ['vs','Variabilní symbol',[/^vs$/,/variabilni/]],
 ];
 function findHeader(rows){
@@ -379,7 +424,7 @@ function rowsToTx(rows,m){
 async function readFile(file){
   const buf=await file.arrayBuffer();const name=file.name;const ext=name.split('.').pop().toLowerCase();
   const label=name.replace(/\.[^.]+$/,'').replace(/[_-]+/g,' ').slice(0,40);
-  if(ext==='gpc'||ext==='abo'){return {name,label,kind:'gpc',txs:parseGPC(decode(buf))}}
+  if(ext==='gpc'||ext==='abo'){const text=decode(buf);const own=(text.match(/^074(\d{16})/m)||[])[1];return {name,label,kind:'gpc',txs:parseGPC(text),num:own?own.replace(/^0+/,''):''}}
   let rows;
   if(ext==='xlsx'||ext==='xls'){
     if(!window.XLSX)throw new Error('Knihovna pro Excel se nenačetla. Uložte výpis jako CSV.');
@@ -391,7 +436,15 @@ async function readFile(file){
     rows=parseCSV(text);
   }
   const h=findHeader(rows);
-  return {name,label,kind:'table',rows,map:guessMap(rows,h)};
+  const p={name,label,kind:'table',rows,map:guessMap(rows,h)};
+  // číslo vlastního účtu: z hlavičky výpisu nebo z názvu souboru
+  const top=rows.slice(0,Math.max(1,h)).flat().map(String).join(' ')+' '+name.replace(/_/g,' ');
+  const num=accNum(top)||((name.match(/(\d{6,10})/)||[])[1]||'');
+  p.num=num;
+  const known=Object.entries(state.ucty||{}).find(([k,u])=>u.cislo&&num&&accBase(u.cislo)&&accBase(u.cislo)===accBase(num))
+    ||Object.entries(state.ucty||{}).find(([k,u])=>u.map&&sameHead(p,u.map)&&Object.keys(state.ucty).length===1);
+  if(known){p.label=known[0];p.num=known[1].cislo||num;if(known[1].map&&sameHead(p,known[1].map))p.map={...known[1].map}}
+  return p;
 }
 async function handleFiles(files){
   for(const f of files){
@@ -416,7 +469,9 @@ function renderImport(){
   box.innerHTML=`
    <div class="phead" style="margin:0"><h2>Import: ${esc(p.name)}</h2><span class="muted">${ui.pending.length>1?`další v pořadí: ${ui.pending.length-1}`:''}</span></div>
    <div class="mapgrid">
-     <label>Název účtu (např. „Tomáš – ČSOB“)<input type="text" id="impLabel" value="${esc(p.label)}"></label>
+     <label>Účet<select id="impAcc">${Object.keys(state.ucty||{}).map(k=>`<option${k===p.label?' selected':''}>${esc(k)}</option>`).join('')}<option value="__new"${state.ucty&&state.ucty[p.label]?'':' selected'}>+ nový účet…</option></select></label>
+     ${state.ucty&&state.ucty[p.label]?'':`<label>Název nového účtu (např. „Společný účet“)<input type="text" id="impLabel" value="${esc(p.label)}"></label>`}
+     <label>Číslo účtu (pro rozpoznání převodů mezi vašimi účty)<input type="text" id="impNum" value="${esc((state.ucty&&state.ucty[p.label]&&state.ucty[p.label].cislo)||p.num||'')}" placeholder="např. 123456789/0800"></label>
      ${p.kind==='table'?`<label>Řádek se záhlavím<input type="number" id="impHead" min="1" max="${p.rows.length}" value="${p.map.header+1}"></label>`:''}
    </div>
    ${p.kind==='table'?`<div class="lbl">Které sloupce co obsahují</div>
@@ -430,12 +485,19 @@ function renderImport(){
   box.querySelectorAll('select[data-k]').forEach(s=>s.onchange=()=>{p.map[s.dataset.k]=+s.value;if(s.dataset.k==='amount'&&+s.value>=0){p.map.credit=-1;p.map.debit=-1}renderImport()});
   const hd=$('impHead');if(hd)hd.onchange=()=>{const h=Math.max(0,Math.min(p.rows.length-1,(+hd.value||1)-1));const inv=p.map.invert;p.map=guessMap(p.rows,h);p.map.invert=inv;renderImport()};
   const inv=$('impInv');if(inv)inv.onchange=()=>{p.map.invert=inv.checked;renderImport()};
-  $('impLabel').oninput=e=>p.label=e.target.value;
+  const il=$('impLabel');if(il)il.oninput=e=>p.label=e.target.value;
+  $('impAcc').onchange=e=>{if(e.target.value==='__new'){p.label=p.newLabel||'Nový účet'}else{p.newLabel=p.newLabel||p.label;p.label=e.target.value;const sv=state.ucty[p.label]?.map;if(sv&&p.kind==='table'&&sameHead(p,sv))p.map={...sv}}renderImport()};
+  $('impNum').oninput=e=>p.num=e.target.value;
   $('impSkip').onclick=()=>{ui.pending.shift();renderImport()};
   $('impGo').onclick=()=>doImport(p,txs);
 }
+function sameHead(p,map){const h=(p.rows[map.header]||[]).map(norm).join('|');return !!map.sig&&h===map.sig}
 function doImport(p,txs){
   const src=(p.label||p.name).trim()||'Účet';
+  state.ucty=state.ucty||{};const U=state.ucty[src]||(state.ucty[src]={cislo:'',banka:''});
+  if(p.num!=null&&String(p.num).trim())U.cislo=String(p.num).trim();
+  if(p.kind==='table')U.map={...p.map,sig:(p.rows[p.map.header]||[]).map(norm).join('|')};
+  U.hint=accNum(p.num)||U.hint||'';U.posl=new Date().toISOString().slice(0,10);
   if(state.sample){state.tx=[];state.sample=false}
   const ids=new Set(state.tx.map(t=>t.id));const seen={};let added=0,dup=0;
   for(const t of txs){
@@ -444,7 +506,7 @@ function doImport(p,txs){
     if(ids.has(id)){dup++;continue}
     const n={id,src,...t,manual:false};delete n.bal;delete n.ord;n.cat=autoCat(n);state.tx.push(n);ids.add(id);added++;
   }
-  save();ui.pending.shift();ui.src='';ui.period='all';
+  recat(false);save();ui.pending.shift();ui.src='';ui.period='all';
   renderImport();render();
   App.bus.emit('rozpocet:import',{src,tx:state.tx.filter(t=>t.src===src)});
   toast(`Importováno ${added} pohybů${dup?`, ${dup} duplicit přeskočeno`:''}.`);
@@ -463,7 +525,7 @@ function monthsSpan(list){
 }
 function render(){
   $('sampleBanner').hidden=!state.sample;if(typeof renderRP==='function'&&$('rpPanel'))setTimeout(()=>renderRP());
-  renderFilters();
+  renderFilters();renderAccounts();
   const list=scoped();const real=list.filter(t=>!isTr(t));
   const inc=real.filter(t=>t.amount>0).reduce((a,t)=>a+t.amount,0);
   const exp=-real.filter(t=>t.amount<0).reduce((a,t)=>a+t.amount,0);
@@ -476,6 +538,26 @@ function render(){
    <div class="kpi"><svg class="ring" viewBox="0 0 44 44" aria-hidden="true"><circle class="trk" cx="22" cy="22" r="18"/><circle class="arc" cx="22" cy="22" r="18" style="stroke-dashoffset:${(113.1*(1-Math.max(0,Math.min(100,inc?bal/inc*100:0))/100)).toFixed(1)};stroke:${bal>=0?'var(--accent)':'var(--exp)'}"/></svg><span class="lbl">Ušetřeno z příjmů</span><span class="v"${inc?` data-cnt="${Math.round(bal/inc*100)}" data-pct="1"`:''}>${inc?Math.round(bal/inc*100)+' %':'—'}</span><span class="s">${unc?`<span style="color:var(--warn)">${unc} nezařazených výdajů</span>`:'vše roztříděno'}</span></div>`;
   countUp();renderTicker(list,real,inc,exp,bal,mcount);
   renderChart();renderCats(list,mcount);document.body.classList.add('stag');renderTable(list);requestAnimationFrame(()=>setTimeout(()=>document.body.classList.remove('stag'),50));renderSettings();
+}
+function renderAccounts(){
+  const P=$('accPanel');if(!P)return;
+  const names=[...new Set(state.tx.map(t=>t.src))];
+  if(state.sample||names.length<1){P.hidden=true;return}
+  P.hidden=false;
+  const per=t=>ui.period==='all'||t.date.startsWith(ui.period);
+  const stat=src=>{const L=state.tx.filter(t=>(!src||t.src===src)&&per(t));const R=L.filter(t=>!isTr(t));const i=R.filter(t=>t.amount>0).reduce((a,t)=>a+t.amount,0),e=-R.filter(t=>t.amount<0).reduce((a,t)=>a+t.amount,0);
+    const all=state.tx.filter(t=>!src||t.src===src);const a=all.reduce((x,t)=>t.date<x?t.date:x,'9'),b=all.reduce((x,t)=>t.date>x?t.date:x,'0');
+    const tr=L.filter(t=>isTr(t)).reduce((x,t)=>x+t.amount,0);return {i,e,b:i-e,n:all.length,a,last:b,tr}};
+  const card=(src,title,sub)=>{const s=stat(src);const on=(ui.src||'')===(src||'');const U=(state.ucty||{})[src]||{};
+    return `<button class="acc ${on?'on':''}" data-acc="${esc(src||'')}"><span class="lbl">${esc(title)}</span><b class="${s.b>=0?'inc':'exp'}">${s.b>0?'+':''}${fmt0.format(s.b)}</b>
+      <span>příjmy <em class="inc">${fmt0.format(s.i)}</em> · výdaje <em class="exp">${fmt0.format(s.e)}</em></span>
+      <span class="muted">${sub||(esc(U.cislo||'')+(U.cislo?' · ':'')+`výpisy do ${fmtD(s.last)}`)}${s.tr?` · převody ${s.tr>0?'+':''}${fmt0.format(s.tr)}`:''}</span></button>`};
+  const stale=names.filter(n=>{const s=stat(n);return s.last<new Date(Date.now()-40*864e5).toISOString().slice(0,10)});
+  P.innerHTML=`<div class="phead"><h2>Účty</h2><span class="muted">${periodName()} · bilance bez převodů mezi vašimi účty</span></div>
+    <div class="accs">${card('','Všechny účty dohromady',`${names.length} ${names.length===1?'účet':names.length<5?'účty':'účtů'} · ${state.tx.length} pohybů`)}${names.map(n=>card(n,n)).join('')}</div>
+    ${stale.length?`<p class="muted" style="margin:10px 0 0;font-size:12px"><span style="color:var(--warn)">Starší výpisy:</span> ${stale.map(esc).join(', ')} – nahrajte novější, ať sedí souhrn i pravidelné platby.</p>`:''}
+    ${ownNums().length<names.length?`<p class="muted" style="margin:6px 0 0;font-size:12px">U účtů bez čísla nepoznám převody mezi vašimi účty. Doplňte čísla v části „Nahraná data“.</p>`:''}`;
+  P.querySelectorAll('[data-acc]').forEach(b=>b.onclick=()=>{ui.src=b.dataset.acc;ui.limit=200;render()});
 }
 function periodName(){if(ui.period==='all')return 'celé období';if(ui.period.length===4)return 'rok '+ui.period;return MONF[+ui.period.slice(5)-1]+' '+ui.period.slice(0,4)}
 function renderFilters(){
@@ -574,7 +656,8 @@ function renderSettings(){
   $('rules').querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>{const i=+b.dataset.up;[state.cats[i-1],state.cats[i]]=[state.cats[i],state.cats[i-1]];recat(false);save();render()});
   $('rules').querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{const c=state.cats.splice(+b.dataset.del,1)[0];for(const t of state.tx)if(t.cat===c.id)t.manual=false;recat(false);save();render()});
   const srcs={};for(const t of state.tx){const s=srcs[t.src]||(srcs[t.src]={n:0,a:'9',b:'0'});s.n++;if(t.date<s.a)s.a=t.date;if(t.date>s.b)s.b=t.date}
-  $('srcs').innerHTML=Object.keys(srcs).length?Object.entries(srcs).map(([k,s])=>`<div><span><b>${esc(k)}</b> <span class="muted num">· ${s.n} pohybů · ${fmtD(s.a)} – ${fmtD(s.b)}</span></span><button class="btn sm danger" data-src="${esc(k)}">Smazat</button></div>`).join(''):'<span class="muted">Nic nenahráno.</span>';
+  $('srcs').innerHTML=Object.keys(srcs).length?Object.entries(srcs).map(([k,s])=>`<div><span><b>${esc(k)}</b> <span class="muted num">· ${s.n} pohybů · ${fmtD(s.a)} – ${fmtD(s.b)}</span></span><input type="text" data-num="${esc(k)}" value="${esc((state.ucty&&state.ucty[k]&&state.ucty[k].cislo)||'')}" placeholder="číslo účtu" aria-label="Číslo účtu ${esc(k)}" style="width:170px;margin-left:auto"><button class="btn sm danger" data-src="${esc(k)}">Smazat</button></div>`).join(''):'<span class="muted">Nic nenahráno.</span>';
+  $('srcs').querySelectorAll('[data-num]').forEach(i=>i.onchange=()=>{state.ucty=state.ucty||{};(state.ucty[i.dataset.num]=state.ucty[i.dataset.num]||{}).cislo=i.value.trim();recat(false);save();render();toast('Číslo účtu uloženo, převody mezi účty přetříděny.')});
   $('srcs').querySelectorAll('[data-src]').forEach(b=>armed(b,()=>{state.tx=state.tx.filter(t=>t.src!==b.dataset.src);if(!state.tx.length)state.sample=false;save();render()}));
 }
 function armed(btn,fn){btn.onclick=()=>{if(btn.classList.contains('armed')){fn()}else{const o=btn.textContent;btn.classList.add('armed');btn.textContent='Opravdu smazat?';setTimeout(()=>{btn.classList.remove('armed');btn.textContent=o},4000)}}}
@@ -708,7 +791,15 @@ const RPCSS=`#rpPanel .rp-row{display:grid;grid-template-columns:auto minmax(0,1
 #rpPanel .rp-nav{display:flex;align-items:center;gap:6px}
 #rpPanel .rp-ed{width:100%;border-collapse:collapse;font-size:13px}#rpPanel .rp-ed td{padding:4px 4px;border-bottom:1px solid var(--line)}#rpPanel .rp-ed input,#rpPanel .rp-ed select{width:100%;min-width:60px;padding:5px 7px}
 @media (max-width:640px){#rpPanel .rp-row{grid-template-columns:auto minmax(0,1fr) auto}#rpPanel .rp-s{grid-column:2/-1;text-align:left;min-width:0}#rpPanel .rp-row .btn{grid-column:2/-1;justify-self:start}}`;
-App.css('rozpocet-rp',RPCSS);
+App.css('rozpocet-rp',RPCSS+`
+#rpPanel .rp-sug{border:1px dashed var(--accent);border-radius:var(--r);padding:12px;margin-bottom:12px;background:var(--accent-soft)}
+#rpPanel .rp-sg{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer}
+#rpPanel .rp-sg:last-of-type{border-bottom:0}
+#accPanel .accs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr));gap:10px}
+#accPanel .acc{display:flex;flex-direction:column;gap:4px;text-align:left;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r);background:var(--card);color:var(--fg);font-size:12px;transition:border-color .2s,box-shadow .2s}
+#accPanel .acc b{font:700 20px var(--f-mono)}#accPanel .acc em{font-style:normal}
+#accPanel .acc:hover{border-color:var(--accent)}#accPanel .acc.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 18px var(--accent-soft)}
+#accPanel .acc:first-child{background:var(--accent-soft)}`);
 function renderRP(){
   const P=$('rpPanel'); if(!P)return;
   const ym=rpYmSel, L=rpMonth(ym), td=App.today(), own=RP.get('pravidelne',[]), manual=RP.get('rucne',{});
@@ -716,11 +807,15 @@ function renderRP(){
   const left=L.filter(x=>x.state!=='ok').reduce((a,x)=>a+ +x.it.castka,0), total=L.reduce((a,x)=>a+ +x.it.castka,0);
   const yearly=rpItems().reduce((a,x)=>a+ +x.castka*12/RP_FREQ[x.freq||'m'][1],0);
   const rel=d=>{const n=rpDays(td,d);return n===0?'dnes':n===1?'zítra':n>0?`za ${n} dní`:n===-1?'včera':`před ${-n} dny`};
-  const noTx=!rpReadTx().length;
-  P.innerHTML=`<div class="phead"><h2>Pravidelné platby</h2><div class="rp-nav"><button class="btn sm" id="rpPrev" aria-label="Předchozí měsíc">‹</button><b style="min-width:120px;text-align:center">${MONF[+ym.slice(5)-1]} ${ym.slice(0,4)}</b><button class="btn sm" id="rpNext" aria-label="Další měsíc">›</button></div></div>
+  const noTx=!rpReadTx().length, skryte=RP.get('skryte',[]);
+  const SG=noTx?[]:rpSuggest().filter(x=>!skryte.includes(x.klic));
+  const sugHtml=SG.length?`<div class="rp-sug"><div class="phead" style="margin:0 0 6px"><b>Nalezeno ve výpisech: ${SG.length}</b><span class="muted" style="font-size:12px">zaškrtnuté se přidají</span></div>
+    ${SG.map((x,i)=>`<label class="rp-sg"><input type="checkbox" data-sg="${i}"${x.typ?' checked':''}><span><b>${esc(x.nazev)}</b><span class="muted"> · ${x.typ?RP_TYP[x.typ]+' · ':''}${RP_FREQ[x.freq][0]} · kolem ${x.den}. dne · ${x.pocet}× ve výpisech · ${esc(x.ucet)}</span></span><span class="rp-a">${fmt0.format(x.castka)}</span></label>`).join('')}
+    <div class="acts" style="margin-top:8px"><button class="btn sm primary" id="rpSgAdd">Přidat vybrané</button><button class="btn sm" id="rpSgHide">Skrýt nevybrané</button></div></div>`:'';
+  P.innerHTML=`${''}<div class="phead"><h2>Pravidelné platby</h2><div class="rp-nav"><button class="btn sm" id="rpPrev" aria-label="Předchozí měsíc">‹</button><b style="min-width:120px;text-align:center">${MONF[+ym.slice(5)-1]} ${ym.slice(0,4)}</b><button class="btn sm" id="rpNext" aria-label="Další měsíc">›</button></div></div>${sugHtml}
     ${L.length?`<p class="muted" style="margin:0 0 6px">Zaplaceno <b style="color:var(--inc)">${ok.length} z ${L.length}</b> · zbývá zaplatit <b>${fmt0.format(left)}</b> z ${fmt0.format(total)}${late.length?` · <b style="color:var(--exp)">${late.length} po splatnosti</b>`:''} · ročně celkem ${fmt0.format(yearly)}</p>
     <div>${L.map(x=>`<div class="rp-row ${x.state}"><i class="rp-dot" aria-hidden="true"></i>
-      <span class="rp-n"><b>${esc(x.it.nazev)}</b><span>${x.it.auto?'z modulu Hypotéka · ':''}${x.it.zpusob==='trvaly'?'trvalý příkaz / inkaso':'platím ručně'}${x.it.freq&&x.it.freq!=='m'?' · '+RP_FREQ[x.it.freq][0]:''}${x.it.pozn?' · '+esc(x.it.pozn):''}</span></span>
+      <span class="rp-n"><b>${esc(x.it.nazev)}</b><span>${x.it.auto?'z modulu Hypotéka · ':''}${x.it.ucet?esc(x.it.ucet)+' · ':''}${x.it.zpusob==='trvaly'?'trvalý příkaz / inkaso':'platím ručně'}${x.it.freq&&x.it.freq!=='m'?' · '+RP_FREQ[x.it.freq][0]:''}${x.it.pozn?' · '+esc(x.it.pozn):''}</span></span>
       <span class="rp-a">${fmt0.format(x.it.castka)}</span>
       <span class="rp-s">${x.state==='ok'?`<span style="color:var(--inc)">zaplaceno ${fmtD(x.paid.date)}</span><br><span class="muted">${x.paid.how==='výpis'?'podle výpisu'+(Math.abs(x.paid.amount-x.it.castka)>1?' ('+fmt0.format(x.paid.amount)+')':''):'označeno ručně'}</span>`:x.state==='late'?`<span style="color:var(--exp)">splatné ${fmtD(x.date)}</span><br><span class="muted">${rel(x.date)}</span>`:`splatné ${fmtD(x.date)}<br><span class="muted">${rel(x.date)}</span>`}</span>
       ${x.state==='ok'&&x.paid.how==='výpis'?'<span></span>':`<button class="btn sm" data-rpmark="${esc(x.it.id)}">${x.state==='ok'?'Zrušit':'Zaplaceno'}</button>`}</div>`).join('')}</div>`
@@ -736,7 +831,7 @@ function renderRP(){
         <td><input data-rp="${i}.klic" value="${esc(x.klic||'')}" placeholder="např. ČEZ, VS 123" aria-label="Klíčová slova"></td>
         <td><button class="btn sm danger" data-rpdel="${i}" aria-label="Smazat">×</button></td></tr>`).join('')}
       </tbody></table></div>
-      <div class="acts" style="margin-top:8px"><button class="btn sm primary" id="rpAdd">+ Přidat platbu</button><button class="btn sm" id="rpSug">Najít ve výpisech</button></div>
+      <div class="acts" style="margin-top:8px"><button class="btn sm primary" id="rpAdd">+ Přidat platbu</button><button class="btn sm" id="rpSug">Znovu prohledat výpisy</button></div>
       <div id="rpSugBox"></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Zaplaceno se pozná samo, když ve výpisu najdu platbu se stejnou částkou (±2 %) do 12 dnů od splatnosti. Když se částka mění (energie), vyplňte „Poznat ve výpisu podle“ – název příjemce, část zprávy nebo VS. Splátku hypotéky doplňuje modul Hypotéka sám.</p>
     </details>`;
@@ -747,9 +842,9 @@ function renderRP(){
   P.querySelectorAll('[data-rp]').forEach(i=>i.onchange=()=>{const [ix,f]=i.dataset.rp.split('.'),a=RP.get('pravidelne',[]);a[+ix][f]=i.type==='number'?(+i.value||0):i.value;saveOwn(a)});
   P.querySelectorAll('[data-rpdel]').forEach(b=>b.onclick=()=>{const a=RP.get('pravidelne',[]);a.splice(+b.dataset.rpdel,1);saveOwn(a)});
   $('rpAdd').onclick=()=>{const a=RP.get('pravidelne',[]);a.push({id:'p'+Date.now().toString(36),nazev:'Nová platba',castka:0,den:15,freq:'m',zpusob:'rucne',klic:''});saveOwn(a);setTimeout(()=>{const inp=P.querySelectorAll('[data-rp$=".nazev"]');inp[inp.length-1]?.select()},0)};
-  $('rpSug').onclick=()=>{const S=rpSuggest(),box=$('rpSugBox');
-    box.innerHTML=S.length?`<div class="lbl" style="margin:10px 0 4px">Opakuje se ve výpisech</div>${S.map((x,i)=>`<div class="taxrow"><span>${esc(x.nazev)} · ${fmt0.format(x.castka)} · kolem ${x.den}. dne · ${x.pocet} měsíců</span><button class="btn sm" data-rpsug="${i}">Přidat</button></div>`).join('')}`:`<p class="muted">${rpReadTx().length?'Ve výpisech jsem nenašel nic dalšího, co by se opakovalo každý měsíc.':'Nejdřív nahrajte výpisy z banky.'}</p>`;
-    box.querySelectorAll('[data-rpsug]').forEach(b=>b.onclick=()=>{const x=S[+b.dataset.rpsug],a=RP.get('pravidelne',[]);a.push({id:'p'+Date.now().toString(36),nazev:x.nazev,castka:x.castka,den:x.den,freq:'m',zpusob:'trvaly',klic:x.klic});saveOwn(a);toast(`Přidáno: ${x.nazev}`)})};
+  $('rpSug').onclick=()=>{RP.set('skryte',[]);renderRP();toast(SG.length?'Návrhy jsou nahoře.':'Ve výpisech jsem nic dalšího nenašel.')};
+  const sa=$('rpSgAdd');if(sa)sa.onclick=()=>{const a=RP.get('pravidelne',[]);let n=0;P.querySelectorAll('[data-sg]').forEach(c=>{if(!c.checked)return;const x=SG[+c.dataset.sg];a.push({id:'p'+Date.now().toString(36)+n,nazev:x.nazev,castka:x.castka,den:x.den,freq:x.freq,mesic:x.mesic,zpusob:'trvaly',klic:x.klic,ucet:x.ucet,typ:x.typ});n++});RP.set('pravidelne',a);renderRP();toast(n?`Přidáno ${n} plateb.`:'Nic nebylo vybráno.')};
+  const sh=$('rpSgHide');if(sh)sh.onclick=()=>{const k=RP.get('skryte',[]);P.querySelectorAll('[data-sg]').forEach(c=>{if(!c.checked)k.push(SG[+c.dataset.sg].klic)});RP.set('skryte',k);renderRP()};
   $('rpDet').ontoggle=e=>{rpEdit=e.target.open};
 }
 

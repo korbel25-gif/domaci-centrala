@@ -115,7 +115,16 @@
 
   /* ---------- úložiště ---------- */
   const NEW = () => ({ id: 'u' + Date.now().toString(36), nazev: 'Hypotéka na pozemek', banka: '', ucel: 'pozemek', castka: 0, cerpani: '', smlouva: '', sazba: 0, roky: 30, den: 0, fixaceDo: '', prvniSplatka: '', konec: '', splatkaBanka: 0, pojisteni: 0, sazby: [], mimoradne: [], uroky: {} });
-  const loadLoans = store => { const a = store.get('loans', null); return Array.isArray(a) && a.length ? a : [NEW()] };
+  const loadLoans = store => {
+    let a = store.get('loans', null); if (!Array.isArray(a) || !a.length) return [NEW()];
+    // úklid: stejný úvěr načtený vícekrát ze souboru → nechat poslední verzi; prázdné rozpracované pryč, když existuje vyplněný
+    const key = L => +L.castka > 0 ? `${+L.castka}|${L.smlouva || L.cerpani || ''}` : '';
+    const seen = new Map(); a.forEach((L, i) => { const k = key(L); if (k) seen.set(k, i) });
+    const b = a.filter((L, i) => { const k = key(L); return k ? seen.get(k) === i : !a.some(x => key(x)) || i === 0 && false });
+    const out = b.length ? b : [NEW()];
+    if (out.length !== a.length) store.set('loans', out);
+    return out;
+  };
   const ready = L => +L.castka > 0 && +L.sazba >= 0 && +L.roky > 0 && !!L.cerpani;
 
   App.loanSchedule = schedule;   // pro kontrolu a další moduly
@@ -124,7 +133,7 @@
   App.loanPayments = () => {
     const td = App.today(), st = App.store('hypoteka');
     return loadLoans(st).filter(ready).map(L => { const s = stats(L); return { L, s } }).filter(({ L, s }) => L.cerpani <= td && s.last >= td.slice(0, 7))
-      .map(({ L, s }) => ({ id: 'hyp-' + L.id, nazev: 'Splátka – ' + (L.nazev || 'úvěr'), castka: Math.round((s.curPay || s.pay) + (+L.pojisteni || 0)), den: s.ioUntil ? 31 : (+L.den || +L.cerpani.slice(8)), freq: 'm', zpusob: 'trvaly', klic: '', pozn: L.banka || '' }));
+      .map(({ L, s }) => ({ id: 'hyp-' + L.id, nazev: 'Splátka – ' + (L.nazev || 'úvěr'), castka: Math.round((s.curPay || s.pay) + (+L.pojisteni || 0)), alt: [Math.round(s.curPay || s.pay)], den: s.ioUntil ? 31 : (+L.den || +L.cerpani.slice(8)), freq: 'm', zpusob: 'trvaly', klic: '', pozn: L.banka || '' }));
   };
 
   App.register({
@@ -278,7 +287,8 @@
           try {
             const j = JSON.parse(await f.text()), src = Array.isArray(j.loans) ? j.loans : [j.loan || j];
             const keys = Object.keys(NEW()).filter(k => k !== 'id');
-            src.forEach((x, i) => { const tgt = i === 0 && !ready(l) ? l : (loans.push(NEW()), loans[loans.length - 1]); keys.forEach(k => { if (x[k] !== undefined && x[k] !== '') tgt[k] = k === 'uroky' ? { ...(tgt.uroky || {}), ...x[k] } : x[k] }); if (i === 0) sel = tgt.id });
+            src.forEach((x, i) => { const same = loans.find(y => +y.castka === +x.castka && (y.smlouva || y.cerpani) && (y.smlouva === x.smlouva || y.banka === x.banka));
+              const tgt = same || (i === 0 && !ready(l) ? l : (loans.push(NEW()), loans[loans.length - 1])); keys.forEach(k => { if (x[k] !== undefined && x[k] !== '') tgt[k] = k === 'uroky' ? { ...(tgt.uroky || {}), ...x[k] } : x[k] }); if (i === 0) sel = tgt.id });
             edit = false; save(); draw(); ctx.toast('Údaje z úvěrové smlouvy načteny. Zkontrolujte je v Nastavení úvěru.');
           } catch (err) { ctx.toast('Soubor se nepodařilo načíst. Je to soubor .json z Centrály?') }
         };
