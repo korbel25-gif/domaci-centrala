@@ -656,7 +656,13 @@ function renderSettings(){
   $('rules').querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>{const i=+b.dataset.up;[state.cats[i-1],state.cats[i]]=[state.cats[i],state.cats[i-1]];recat(false);save();render()});
   $('rules').querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{const c=state.cats.splice(+b.dataset.del,1)[0];for(const t of state.tx)if(t.cat===c.id)t.manual=false;recat(false);save();render()});
   const srcs={};for(const t of state.tx){const s=srcs[t.src]||(srcs[t.src]={n:0,a:'9',b:'0'});s.n++;if(t.date<s.a)s.a=t.date;if(t.date>s.b)s.b=t.date}
-  $('srcs').innerHTML=Object.keys(srcs).length?Object.entries(srcs).map(([k,s])=>`<div><span><b>${esc(k)}</b> <span class="muted num">· ${s.n} pohybů · ${fmtD(s.a)} – ${fmtD(s.b)}</span></span><input type="text" data-num="${esc(k)}" value="${esc((state.ucty&&state.ucty[k]&&state.ucty[k].cislo)||'')}" placeholder="číslo účtu" aria-label="Číslo účtu ${esc(k)}" style="width:170px;margin-left:auto"><button class="btn sm danger" data-src="${esc(k)}">Smazat</button></div>`).join(''):'<span class="muted">Nic nenahráno.</span>';
+  $('srcs').innerHTML=Object.keys(srcs).length?Object.entries(srcs).map(([k,s])=>`<div><span><input type="text" data-ren="${esc(k)}" value="${esc(k)}" aria-label="Název účtu" title="Přejmenovat účet" style="font-weight:700;width:190px"> <span class="muted num">· ${s.n} pohybů · ${fmtD(s.a)} – ${fmtD(s.b)}</span></span><input type="text" data-num="${esc(k)}" value="${esc((state.ucty&&state.ucty[k]&&state.ucty[k].cislo)||'')}" placeholder="číslo účtu" aria-label="Číslo účtu ${esc(k)}" style="width:170px;margin-left:auto"><button class="btn sm danger" data-src="${esc(k)}">Smazat</button></div>`).join(''):'<span class="muted">Nic nenahráno.</span>';
+  $('srcs').querySelectorAll('[data-ren]').forEach(i=>i.onchange=()=>{const o=i.dataset.ren,n=i.value.trim();if(!n||n===o)return;
+    if(state.tx.some(t=>t.src===n)&&!confirm(`Účet „${n}“ už existuje. Sloučit „${o}“ do něj?`)){i.value=o;return}
+    for(const t of state.tx)if(t.src===o){t.src=n;t.id=t.id.replace('|'+o+'#','|'+n+'#')}
+    state.ucty=state.ucty||{};if(state.ucty[o]){state.ucty[n]={...state.ucty[o],...(state.ucty[n]||{})};delete state.ucty[o]}
+    const pl=RP.get('pravidelne',[]);pl.forEach(x=>{if(x.ucet===o)x.ucet=n});RP.set('pravidelne',pl);
+    if(ui.src===o)ui.src=n;save();render();toast(`Účet přejmenován na „${n}“.`)});
   $('srcs').querySelectorAll('[data-num]').forEach(i=>i.onchange=()=>{state.ucty=state.ucty||{};(state.ucty[i.dataset.num]=state.ucty[i.dataset.num]||{}).cislo=i.value.trim();recat(false);save();render();toast('Číslo účtu uloženo, převody mezi účty přetříděny.')});
   $('srcs').querySelectorAll('[data-src]').forEach(b=>armed(b,()=>{state.tx=state.tx.filter(t=>t.src!==b.dataset.src);if(!state.tx.length)state.sample=false;save();render()}));
 }
