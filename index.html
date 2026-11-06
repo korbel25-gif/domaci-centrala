@@ -15,7 +15,7 @@
 <script>try{var t=localStorage.getItem("cs-theme")||"auto";document.documentElement.dataset.cs=t==="auto"?(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"):t}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
-<link rel="stylesheet" href="core/core.css">
+<link rel="stylesheet" href="core/core.css?v=20261106">
 <!-- Knihovny třetích stran (potřebují internet): Excel import a QR platby -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -38,18 +38,18 @@
 </div>
 <div class="toast" id="coreToast" hidden></div>
 
-<script src="config.js"></script>
-<script src="core/core.js"></script>
+<script src="config.js?v=20261106"></script>
+<script src="core/core.js?v=20261106"></script>
 
 <!-- ============ MODULY ============
      Nový modul = nový řádek. Pořadí v menu určuje vlastnost "order" v modulu. -->
-<script src="modules/rozpocet.js"></script>
-<script src="modules/dum.js"></script>
-<script src="modules/investice.js"></script>
-<script src="modules/faktury.js"></script>
-<script src="modules/domacnost.js"></script>
-<script src="modules/asistent.js"></script>
-<!-- <script src="modules/_sablona.js"></script> -->
+<script src="modules/rozpocet.js?v=20261106"></script>
+<script src="modules/dum.js?v=20261106"></script>
+<script src="modules/investice.js?v=20261106"></script>
+<script src="modules/faktury.js?v=20261106"></script>
+<script src="modules/domacnost.js?v=20261106"></script>
+<script src="modules/asistent.js?v=20261106"></script>
+<!-- <script src="modules/_sablona.js?v=20261106"></script> -->
 
 <script>App.start()</script>
 </body>
