@@ -144,13 +144,13 @@ const RP_KNOWN = [
   { re: /\b(cssz|ossz|pssz|socialni (poj|zabezp)|duchodove poj|ceska sprava socialniho)/, nazev: 'Sociální pojištění', den: 20, typ: 'pojistne' },
   { re: /\b(najem|najemne|pronajem bytu|platba najmu|svj|spolecenstvi vlastniku|fond oprav|bytove druzstvo)/, nazev: 'Nájem / bydlení', den: 0, typ: 'bydleni' },
   { re: /\b(netflix|spotify|youtube|google one|google play|google \*|apple\.com|itunes|icloud|disney|hbo|max\.com|voyo|oneplay|skylink|prime video|amazon prime|audible|storytel|microsoft|xbox|playstation|adobe|canva|openai|chatgpt|anthropic|claude\.ai|dropbox|notion)/, nazev: '', den: 0, typ: 'predplatne' },
-  { re: /\b(o2 czech|o2 cz|t-mobile|tmobile|vodafone|nordic telecom|upc|vodafone cz|poda|starnet)/, nazev: '', den: 0, typ: 'telefon' },
+  { re: /\b(o2|t-mobile|tmobile|vodafone|nordic telecom|upc|poda|starnet)\b/, nazev: '', den: 0, typ: 'telefon' },
   { re: /\b(cez|e\.on|eon|innogy|pre |ppas|bohemia energy|centropol|mnd|vodarn|vodovod|teplarn)/, nazev: '', den: 0, typ: 'energie' },
   { re: /\b(pojist|kooperativa|allianz|generali|uniqa|direct|cpp|csob poj|pillow|slavia poj)/, nazev: '', den: 0, typ: 'pojisteni' },
   { re: /\b(skolka|ms |materska skola|druzina|krouzek|skolne|obedy|strava\.cz)/, nazev: '', den: 0, typ: 'deti' }
 ];
 const RP_TYP = { pojistne: 'pojistné OSVČ', bydleni: 'bydlení', predplatne: 'předplatné', telefon: 'telefon a internet', energie: 'energie', pojisteni: 'pojištění', deti: 'děti' };
-const rpTitle = s => String(s || '').trim().replace(/\s+/g, ' ').replace(/^(platba|trvaly prikaz|inkaso|nakup|karta)\s*[:-]?\s*/i, '').slice(0, 40);
+const rpTitle = s => String(s || '').replace(/\d{1,2}\.\d{1,2}\.\d{2,4}/g, '').replace(/\b(gopay|paypal|comgate)\s*\*\s*/gi, '').replace(/\s+[A-Z]{2}$/, '').trim().replace(/\s+/g, ' ').replace(/^(platba|trvaly prikaz|inkaso|nakup|karta)\s*[:-]?\s*/i, '').slice(0, 40);
 /** Návrhy z výpisů: opakující se odchozí platby (stejný příjemce / účet a podobná částka) + známé typy plateb. */
 function rpSuggest() {
   const tx = rpReadTx().filter(t => t.amount < 0 && !/^(prevody)$/.test(t.cat || '')), groups = {};
@@ -159,6 +159,7 @@ function rpSuggest() {
     const hay = rpNorm([t.party, t.desc, t.note, t.acct].join(' '));
     if (/hypot|uver|splatka jistiny|splatka uroku/.test(hay)) continue;
     const kn = RP_KNOWN.find(k => k.re.test(' ' + hay));
+    if (!kn && /platebni kart|kartou|karty/.test(hay)) continue;   // běžné nákupy kartou nejsou pravidelné platby
     const acct = String(t.acct || '').replace(/\s/g, '');
     const key = acct && acct.length > 5 ? 'a:' + acct : 'p:' + rpNorm(t.party || t.desc).replace(/[^a-z0-9]+/g, ' ').trim().split(' ').slice(0, 3).join(' ');
     if (key.length < 4) continue;
@@ -169,8 +170,9 @@ function rpSuggest() {
   for (const g of Object.values(groups)) {
     const L = g.L.sort((a, b) => a.date.localeCompare(b.date)), months = [...new Set(L.map(t => rpYm(t.date)))];
     if (months.length < (g.kn ? 2 : 3)) continue;
+    if (!g.kn && L.length / months.length > 1.3) continue;   // víc plateb za měsíc = běžné nákupy, ne pravidelná platba
     const last = L.slice(-3).map(t => -t.amount).sort((a, b) => a - b), med = last[Math.floor(last.length / 2)];
-    const similar = L.filter(t => Math.abs(-t.amount - med) <= med * (g.kn && g.kn.typ === 'energie' ? 0.35 : 0.12));
+    const similar = L.filter(t => Math.abs(-t.amount - med) <= med * (g.kn ? (g.kn.typ === 'energie' ? 0.35 : 0.12) : 0.06));
     const sm = [...new Set(similar.map(t => rpYm(t.date)))];
     if (sm.length < (g.kn ? 2 : 3)) continue;
     if (loans.some(l => Math.abs(l - med) <= 2)) continue;
@@ -310,11 +312,14 @@ const catById=id=>state.cats.find(c=>c.id===id)||state.cats.find(c=>c.id===FALLB
 const accNum=s=>{const m=String(s||'').replace(/\s/g,'').match(/(?:(\d{1,6})-)?(\d{2,10})\/(\d{4})/);if(m)return m[2].replace(/^0+/,'')+'/'+m[3];
   const ib=String(s||'').replace(/\s/g,'').toUpperCase().match(/^CZ\d{2}(\d{4})(\d{6})(\d{10})$/);return ib?ib[3].replace(/^0+/,'')+'/'+ib[1]:''};
 const accBase=s=>{const n=accNum(s);if(n)return n.split('/')[0];const d=String(s||'').replace(/\D/g,'').replace(/^0+/,'');return d.length>=6?d:''};
-const ownNums=()=>Object.values(state.ucty||{}).map(u=>accBase(u.cislo)).filter(Boolean);
+const ownNums=()=>[...Object.values(state.ucty||{}).map(u=>accBase(u.cislo)),...String(state.dalsiUcty||'').split(/[,;\n]+/).map(accBase)].filter(Boolean);
+/* Účty, kam peníze chodí i odkud přicházejí (typicky vaše další účty) – návrh pro „vlastní účty“. */
+function maybeOwn(){const own=new Set(ownNums()),m={};for(const t of state.tx){const k=accBase(t.acct);if(!k||own.has(k))continue;const x=m[k]||(m[k]={k,acct:t.acct,party:t.party,inn:0,out:0,n:0});x.n++;if(t.amount>0)x.inn++;else x.out++;if(t.party)x.party=t.party}
+  return Object.values(m).filter(x=>x.inn>=2&&x.out>=2).sort((a,b)=>b.n-a.n).slice(0,5)}
 function isOwnTransfer(t){const n=ownNums();if(!n.length)return false;const k=accBase(t.acct);return !!k&&n.includes(k)}
 function autoCat(t){
-  if(isOwnTransfer(t))return 'prevody';
-  const hay=' '+tok([t.party,t.desc,t.note,t.acct,t.vs].join(' '))+' ';
+  if(isOwnTransfer(t)||/prevod mezi vlastnimi/.test(norm(t.bankCat||'')))return 'prevody';
+  const hay=' '+tok([t.party,t.desc,t.note,t.acct,t.vs,t.bankCat].join(' '))+' ';
   for(const c of state.cats){
     if(c.type==='inc'&&t.amount<=0)continue;
     if(c.type==='exp'&&t.amount>=0)continue;
@@ -326,6 +331,9 @@ function recat(all){for(const t of state.tx){if(all)t.manual=false;if(!t.manual)
 
 /* ---------- parsing ---------- */
 function decode(buf){
+  const u=new Uint8Array(buf.slice?buf.slice(0,2):buf);   // George (ČS) exportuje v UTF-16
+  if(u[0]===0xFF&&u[1]===0xFE)return new TextDecoder('utf-16le').decode(buf).replace(/^\uFEFF/,'');
+  if(u[0]===0xFE&&u[1]===0xFF)return new TextDecoder('utf-16be').decode(buf).replace(/^\uFEFF/,'');
   try{return new TextDecoder('utf-8',{fatal:true}).decode(buf).replace(/^﻿/,'')}
   catch(e){return new TextDecoder('windows-1250').decode(buf)}
 }
@@ -421,6 +429,30 @@ function rowsToTx(rows,m){
   return out;
 }
 
+/* ---------- formáty konkrétních bank (rozpoznají se podle záhlaví) ---------- */
+const PROFILES=[
+ {fmt:'MONETA Money Bank',test:h=>h.includes('cislo protiuctu')&&h.includes('banka protiuctu')&&h.includes('nazev uctu prijemce')&&h.includes('odeslano'),
+  toTx(rows,hi){const H=rows[hi].map(norm),c=k=>H.indexOf(k),g=(r,k)=>{const i=c(k);return i<0?'':String(r[i]??'').trim()};const out=[];let own='';
+   for(const r of rows.slice(hi+1)){const date=parseDate(g(r,'odeslano'))||parseDate(g(r,'splatnost'));if(!date)continue;   // bez data = blokace kartou, ještě nezaúčtováno
+     const a=parseAmt(g(r,'castka'));if(a==null||!a)continue;
+     if(!own&&/\//.test(g(r,'cislo uctu')))own=g(r,'cislo uctu');
+     const pp=[g(r,'popis platby'),g(r,'popis platby 2'),g(r,'popis platby 3')].filter(Boolean).join(' ');
+     const merchant=g(r,'nazev uctu prijemce')||(/kartou|karty/i.test(g(r,'typ transakce')+g(r,'platebni metoda'))?pp:'')||g(r,'nazev trvaleho prikazu');
+     const acct=g(r,'cislo protiuctu')?g(r,'cislo protiuctu')+(g(r,'banka protiuctu')?'/'+g(r,'banka protiuctu'):''):'';
+     out.push({date,amount:Math.round(a*100)/100,party:merchant.replace(/\s{2,}/g,' ').trim(),desc:[g(r,'zprava pro prijemce'),pp,g(r,'typ transakce')].filter(Boolean).join(' · '),note:g(r,'poznamka pro me'),acct,vs:g(r,'variabilni symbol'),bankCat:g(r,'nazev kategorie')})}
+   return {txs:out,num:own}}}
+ ,
+ {fmt:'Česká spořitelna (George)',test:h=>h.includes('cislo uctu vlastnika')&&h.includes('datum zauctovani')&&h.includes('bankovni kod protiuctu'),
+  toTx(rows,hi){const H=rows[hi].map(norm),g=(r,k)=>{const i=H.indexOf(k);return i<0?'':String(r[i]??'').trim()};const out=[];let own='';
+   for(const r of rows.slice(hi+1)){const date=parseDate(g(r,'datum zauctovani'));if(!date)continue;
+     const a=parseAmt(g(r,'castka'));if(a==null||!a)continue;
+     if(!own&&/\//.test(g(r,'cislo uctu vlastnika')))own=g(r,'cislo uctu vlastnika');
+     const pc=g(r,'protiucet'),bk=g(r,'bankovni kod protiuctu');
+     out.push({date,amount:Math.round(a*100)/100,party:(g(r,'nazev protiuctu')||g(r,'misto pouziti karty')||g(r,'nazev prikazu/souhlasu')).replace(/\s{2,}/g,' '),
+       desc:[g(r,'typ transakce'),g(r,'zprava pro prijemce'),g(r,'zprava pro me'),g(r,'misto pouziti karty'),g(r,'nazev prikazu/souhlasu')].filter(Boolean).join(' · '),
+       note:g(r,'poznamka'),acct:pc?(pc.includes('/')?pc:pc+(bk&&bk!=='0'?'/'+bk:'')):'',vs:g(r,'variabilni symbol').replace(/^0+/,''),bankCat:g(r,'kategorie')})}
+   return {txs:out,num:own}}}
+];
 async function readFile(file){
   const buf=await file.arrayBuffer();const name=file.name;const ext=name.split('.').pop().toLowerCase();
   const label=name.replace(/\.[^.]+$/,'').replace(/[_-]+/g,' ').slice(0,40);
@@ -436,10 +468,13 @@ async function readFile(file){
     rows=parseCSV(text);
   }
   const h=findHeader(rows);
-  const p={name,label,kind:'table',rows,map:guessMap(rows,h)};
+  const head=(rows[h]||[]).map(norm),prof=PROFILES.find(x=>x.test(head));
+  let p;
+  if(prof){const r=prof.toTx(rows,h);p={name,label,kind:'profile',fmt:prof.fmt,txs:r.txs,rows,map:{header:h}};p.prefNum=r.num}
+  else p={name,label,kind:'table',rows,map:guessMap(rows,h)};
   // číslo vlastního účtu: z hlavičky výpisu nebo z názvu souboru
   const top=rows.slice(0,Math.max(1,h)).flat().map(String).join(' ')+' '+name.replace(/_/g,' ');
-  const num=accNum(top)||((name.match(/(\d{6,10})/)||[])[1]||'');
+  const num=p.prefNum||accNum(top)||((name.match(/(\d{6,10})/)||[])[1]||'');
   p.num=num;
   const known=Object.entries(state.ucty||{}).find(([k,u])=>u.cislo&&num&&accBase(u.cislo)&&accBase(u.cislo)===accBase(num))
     ||Object.entries(state.ucty||{}).find(([k,u])=>u.map&&sameHead(p,u.map)&&Object.keys(state.ucty).length===1);
@@ -456,7 +491,7 @@ async function handleFiles(files){
 }
 
 /* ---------- import panel ---------- */
-function currentTxs(p){return p.kind==='gpc'?p.txs:rowsToTx(p.rows,p.map)}
+function currentTxs(p){return p.kind==='table'?rowsToTx(p.rows,p.map):p.txs}
 function renderImport(){
   const box=$('imp');const p=ui.pending[0];
   if(!p){box.hidden=true;box.innerHTML='';return}
@@ -476,7 +511,7 @@ function renderImport(){
    </div>
    ${p.kind==='table'?`<div class="lbl">Které sloupce co obsahují</div>
    <div class="mapgrid">${FIELDS.map(([k,l])=>`<label>${l}<select data-k="${k}">${opts(p.map[k])}</select></label>`).join('')}</div>
-   <label class="check"><input type="checkbox" id="impInv"${p.map.invert?' checked':''}> Obrátit znaménko (výdaje jsou ve výpisu kladné)</label>`:'<div class="muted">Formát GPC (ABO) — sloupce jsou dané standardem.</div>'}
+   <label class="check"><input type="checkbox" id="impInv"${p.map.invert?' checked':''}> Obrátit znaménko (výdaje jsou ve výpisu kladné)</label>`:(p.kind==='profile'?`<div class="muted">Rozpoznaný formát: <b>${esc(p.fmt)}</b> — sloupce jsou nastavené automaticky.</div>`:'')+'<div class="muted"'+(p.kind==='profile'?' hidden':'')+'>Formát GPC (ABO) — sloupce jsou dané standardem.</div>'}
    <div class="lbl">Náhled ${txs.length?`· ${txs.length} pohybů · ${range} · součet ${fmt0.format(sum)}`:''}</div>
    ${txs.length?`<div class="prev"><table><thead><tr><th>Datum</th><th>Protistrana</th><th>Zpráva</th><th class="amt">Částka</th></tr></thead><tbody>
      ${txs.slice(0,6).map(t=>`<tr><td class="d">${fmtD(t.date)}</td><td>${esc(t.party||t.acct)}</td><td class="x">${esc(t.desc||t.note)}</td><td class="amt ${t.amount>0?'inc':'exp'}">${fmt2.format(t.amount)}</td></tr>`).join('')}
@@ -556,8 +591,10 @@ function renderAccounts(){
   P.innerHTML=`<div class="phead"><h2>Účty</h2><span class="muted">${periodName()} · bilance bez převodů mezi vašimi účty</span></div>
     <div class="accs">${card('','Všechny účty dohromady',`${names.length} ${names.length===1?'účet':names.length<5?'účty':'účtů'} · ${state.tx.length} pohybů`)}${names.map(n=>card(n,n)).join('')}</div>
     ${stale.length?`<p class="muted" style="margin:10px 0 0;font-size:12px"><span style="color:var(--warn)">Starší výpisy:</span> ${stale.map(esc).join(', ')} – nahrajte novější, ať sedí souhrn i pravidelné platby.</p>`:''}
-    ${ownNums().length<names.length?`<p class="muted" style="margin:6px 0 0;font-size:12px">U účtů bez čísla nepoznám převody mezi vašimi účty. Doplňte čísla v části „Nahraná data“.</p>`:''}`;
+    ${ownNums().length<names.length?`<p class="muted" style="margin:6px 0 0;font-size:12px">U účtů bez čísla nepoznám převody mezi vašimi účty. Doplňte čísla v části „Nahraná data“.</p>`:''}
+    ${(()=>{const M=maybeOwn();return M.length?`<div style="margin-top:10px;font-size:13px"><span class="muted">Peníze sem chodí i odsud odcházejí – jsou to vaše účty (převody se pak nebudou počítat jako příjem/výdaj)?</span>${M.map(x=>`<div class="taxrow"><span>${esc(x.acct)} · ${esc(x.party||'')} · ${x.n} pohybů</span><button class="btn sm" data-own="${esc(x.acct)}">Je to můj účet</button></div>`).join('')}</div>`:''})()}`;
   P.querySelectorAll('[data-acc]').forEach(b=>b.onclick=()=>{ui.src=b.dataset.acc;ui.limit=200;render()});
+  P.querySelectorAll('[data-own]').forEach(b=>b.onclick=()=>{state.dalsiUcty=[state.dalsiUcty||'',b.dataset.own].filter(Boolean).join(', ');recat(false);save();render();toast('Účet přidán mezi vaše. Převody na něj se už nepočítají jako výdaje.')});
 }
 function periodName(){if(ui.period==='all')return 'celé období';if(ui.period.length===4)return 'rok '+ui.period;return MONF[+ui.period.slice(5)-1]+' '+ui.period.slice(0,4)}
 function renderFilters(){
@@ -657,6 +694,8 @@ function renderSettings(){
   $('rules').querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{const c=state.cats.splice(+b.dataset.del,1)[0];for(const t of state.tx)if(t.cat===c.id)t.manual=false;recat(false);save();render()});
   const srcs={};for(const t of state.tx){const s=srcs[t.src]||(srcs[t.src]={n:0,a:'9',b:'0'});s.n++;if(t.date<s.a)s.a=t.date;if(t.date>s.b)s.b=t.date}
   $('srcs').innerHTML=Object.keys(srcs).length?Object.entries(srcs).map(([k,s])=>`<div><span><input type="text" data-ren="${esc(k)}" value="${esc(k)}" aria-label="Název účtu" title="Přejmenovat účet" style="font-weight:700;width:190px"> <span class="muted num">· ${s.n} pohybů · ${fmtD(s.a)} – ${fmtD(s.b)}</span></span><input type="text" data-num="${esc(k)}" value="${esc((state.ucty&&state.ucty[k]&&state.ucty[k].cislo)||'')}" placeholder="číslo účtu" aria-label="Číslo účtu ${esc(k)}" style="width:170px;margin-left:auto"><button class="btn sm danger" data-src="${esc(k)}">Smazat</button></div>`).join(''):'<span class="muted">Nic nenahráno.</span>';
+  $('srcs').insertAdjacentHTML('beforeend',`<label style="display:block;margin-top:10px;font-size:13px">Další vlastní účty bez výpisů (spořicí, manželky…) – převody na ně nejsou výdaj<input type="text" id="dalsiUcty" value="${esc(state.dalsiUcty||'')}" placeholder="např. 249773770/0600, 123456789/0800" style="width:100%;margin-top:4px"></label>`);
+  $('dalsiUcty').onchange=e=>{state.dalsiUcty=e.target.value;recat(false);save();render();toast('Uloženo, převody přetříděny.')};
   $('srcs').querySelectorAll('[data-ren]').forEach(i=>i.onchange=()=>{const o=i.dataset.ren,n=i.value.trim();if(!n||n===o)return;
     if(state.tx.some(t=>t.src===n)&&!confirm(`Účet „${n}“ už existuje. Sloučit „${o}“ do něj?`)){i.value=o;return}
     for(const t of state.tx)if(t.src===o){t.src=n;t.id=t.id.replace('|'+o+'#','|'+n+'#')}
